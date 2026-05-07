@@ -2,7 +2,7 @@
 
 Single-chain connect/disconnect button — pick a connector, connect, read the account, disconnect.
 
-**Depends on:** [setup.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/setup.md)
+**Depends on:** [setup.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/setup.md)
 
 ## Hooks
 
@@ -79,7 +79,7 @@ export function EvmConnectButton() {
 )}
 ```
 
-`isInstalled` reads `window.*` at render time (no extra subscription). For batch install detection across wallet brands, use [`useIsWalletInstalled`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md#useiswalletinstalled--install-detection).
+`isInstalled` reads `window.*` at render time (no extra subscription). For batch install detection across wallet brands, use [`useIsWalletInstalled`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md#useiswalletinstalled--install-detection).
 
 ## Caveat — provider-managed chains resolve with `undefined`
 
@@ -97,7 +97,7 @@ Non-provider chains (Bitcoin, ICON, Injective, Stellar, NEAR, Stacks) return the
 
 ## Multiple chains, one button
 
-For a "connect EVM + Solana + Bitcoin in one click" pattern, use [`useBatchConnect`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/BATCH_OPERATIONS.md):
+For a "connect EVM + Solana + Bitcoin in one click" pattern, use [`useBatchConnect`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/BATCH_OPERATIONS.md):
 
 ```tsx
 import { useBatchConnect } from '@sodax/wallet-sdk-react';
@@ -111,6 +111,6 @@ const { run, status } = useBatchConnect({ connectors: ['hana'] });
 
 ## Reference docs
 
-- [Connect Flow](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — full lifecycle reference + error handling
-- [Connectors](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector` shape, deep imports for concrete classes
-- [Batch Operations](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/BATCH_OPERATIONS.md) — multi-chain connect by wallet identifier
+- [Connect Flow](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — full lifecycle reference + error handling
+- [Connectors](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector` shape, deep imports for concrete classes
+- [Batch Operations](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/BATCH_OPERATIONS.md) — multi-chain connect by wallet identifier

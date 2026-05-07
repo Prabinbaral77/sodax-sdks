@@ -2,7 +2,7 @@
 
 Learn how to configure the Sodax SDK for your application. The SDK supports Swaps (intent-based solver swaps), Money Market (cross-chain lending and borrowing), and many other cross-chain DeFi services. All feature configurations are optional—you can use just the features you need.
 
-The canonical TypeScript shape is [`SodaxConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/sodax-config/sodax-config.ts) in `@sodax/types` (re-exported from `@sodax/sdk`).
+The canonical TypeScript shape is [`SodaxConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/sodax-config/sodax-config.ts) in `@sodax/types` (re-exported from `@sodax/sdk`).
 
 ## Basic Configuration
 
@@ -16,7 +16,7 @@ import { Sodax } from '@sodax/sdk';
 const sodax = new Sodax();
 ```
 
-The constructor signature is `new Sodax(config?: DeepPartial<SodaxConfig>)`. When called with no arguments the SDK merges your overrides with the packaged static defaults ([`sodaxConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/sodax-config/sodax-config.ts)) using a recursive `deepMerge`. Omitted keys keep their default values.
+The constructor signature is `new Sodax(config?: DeepPartial<SodaxConfig>)`. When called with no arguments the SDK merges your overrides with the packaged static defaults ([`sodaxConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/sodax-config/sodax-config.ts)) using a recursive `deepMerge`. Omitted keys keep their default values.
 
 ### Dynamic Configuration
 
@@ -50,7 +50,7 @@ Top-level keys on `SodaxConfig`:
 
 ### Partner Fees
 
-Configure partner fees per feature. `SwapService` reads `swaps.partnerFee`, `MoneyMarketService` reads `moneyMarket.partnerFee`, and `BridgeService` reads `bridge.partnerFee`. See [Monetize SDK](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/MONETIZE_SDK.md) for usage details and per-request overrides.
+Configure partner fees per feature. `SwapService` reads `swaps.partnerFee`, `MoneyMarketService` reads `moneyMarket.partnerFee`, and `BridgeService` reads `bridge.partnerFee`. See [Monetize SDK](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/MONETIZE_SDK.md) for usage details and per-request overrides.
 
 ```typescript
 import { Sodax, PartnerFee } from '@sodax/sdk';
@@ -105,7 +105,7 @@ const partnerFeeAmount: PartnerFee = {
 
 ### Solver (`solver`)
 
-Intent-based swaps use the top-level **`solver`** block (not nested under `swaps`). Defaults match [`solverConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/common/constants.ts) in `@sodax/types`.
+Intent-based swaps use the top-level **`solver`** block (not nested under `swaps`). Defaults match [`solverConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/common/constants.ts) in `@sodax/types`.
 
 ```typescript
 import { Sodax, getSolverConfig, type SolverConfig } from '@sodax/sdk';
@@ -132,7 +132,7 @@ Partner fees for swaps belong in **`swaps.partnerFee`**, not inside `solver`.
 
 ### Money market (`moneyMarket`)
 
-`MoneyMarketConfig` includes `lendingPool`, `uiPoolDataProvider`, `poolAddressesProvider`, `bnUSD`, `bnUSDVault`, `bnUSDAToken`, `supportedTokens`, `supportedReserveAssets`, and `partnerFee`. The packaged default is [`moneyMarketConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/moneyMarket/moneyMarket.ts).
+`MoneyMarketConfig` includes `lendingPool`, `uiPoolDataProvider`, `poolAddressesProvider`, `bnUSD`, `bnUSDVault`, `bnUSDAToken`, `supportedTokens`, `supportedReserveAssets`, and `partnerFee`. The packaged default is [`moneyMarketConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/moneyMarket/moneyMarket.ts).
 
 ```typescript
 import { Sodax, moneyMarketConfig, type MoneyMarketConfig } from '@sodax/sdk';
@@ -187,7 +187,7 @@ EVM spokes use `rpcUrl` on their spoke config; Stellar uses `horizonRpcUrl` and 
 
 ### Backend API (`api`)
 
-[`ApiConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/common/constants.ts) controls `baseURL`, `timeout`, and `headers` for `BackendApiService` (used by `ConfigService` and `initialize()`).
+[`ApiConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/common/constants.ts) controls `baseURL`, `timeout`, and `headers` for `BackendApiService` (used by `ConfigService` and `initialize()`).
 
 ```typescript
 import { Sodax } from '@sodax/sdk';
@@ -203,11 +203,11 @@ const sodax = new Sodax({
 
 ### Relayer (`relay`)
 
-[`RelayConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/common/constants.ts) sets `relayerApiEndpoint` and **`relayChainIdMap`** (mapping each `SpokeChainKey` to the hub intent-relay bigint ID). Override only when pointing at a different relayer or custom map.
+[`RelayConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/common/constants.ts) sets `relayerApiEndpoint` and **`relayChainIdMap`** (mapping each `SpokeChainKey` to the hub intent-relay bigint ID). Override only when pointing at a different relayer or custom map.
 
 ### DEX (`dex`)
 
-[`DexConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/dex/dex.ts) holds concentrated-liquidity addresses and pool keys for Sonic. Most integrations keep the packaged [`dexConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/types/src/dex/dex.ts) default.
+[`DexConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/dex/dex.ts) holds concentrated-liquidity addresses and pool keys for Sonic. Most integrations keep the packaged [`dexConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/types/src/dex/dex.ts) default.
 
 ### Complete custom configuration
 
@@ -285,5 +285,5 @@ ChainKeys.SOLANA_MAINNET;
 
 ## Additional Resources
 
-- [Monetize SDK](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/MONETIZE_SDK.md) - Detailed fee configuration guide
-- [Architecture Reference](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/ARCHITECTURE_REFACTOR_SUMMARY.md) - Spoke services, raw tx handling, `Result<T>`, error conventions
+- [Monetize SDK](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/MONETIZE_SDK.md) - Detailed fee configuration guide
+- [Architecture Reference](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/ARCHITECTURE_REFACTOR_SUMMARY.md) - Spoke services, raw tx handling, `Result<T>`, error conventions

@@ -2,7 +2,7 @@
 
 The connect flow covers the full wallet lifecycle in `@sodax/wallet-sdk-react`: discover available connectors → connect to a wallet → read connected account state → disconnect. Every hook reads from the central Zustand store — no direct chain-SDK hook usage in user code.
 
-The canonical hook surface is exported from [`src/hooks/index.ts`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/src/hooks/index.ts).
+The canonical hook surface is exported from [`src/hooks/index.ts`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/src/hooks/index.ts).
 
 ## Table of contents
 
@@ -169,7 +169,7 @@ const evmConnection = useXConnection({ xChainType: 'EVM' });
 // evmConnection: { xAccount: XAccount, xConnectorId: string } | undefined
 ```
 
-**`xChainId` vs `xChainType`** — `useXAccount` and `useWalletProvider` accept either, never both. `xChainId` (a `SpokeChainKey` like `ChainKeys.BSC_MAINNET`) is resolved to its family via `getXChainType()` internally. For EVM, the family-level view is correct because wagmi maintains a single connection across all configured EVM networks (see [`EVM_SWITCH_CHAIN.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md)).
+**`xChainId` vs `xChainType`** — `useXAccount` and `useWalletProvider` accept either, never both. `xChainId` (a `SpokeChainKey` like `ChainKeys.BSC_MAINNET`) is resolved to its family via `getXChainType()` internally. For EVM, the family-level view is correct because wagmi maintains a single connection across all configured EVM networks (see [`EVM_SWITCH_CHAIN.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md)).
 
 When no wallet is connected, `useXAccount` returns `{ address: undefined, xChainType }` (not `undefined`) so consumers don't need to null-check before reading `xChainType`.
 
@@ -224,7 +224,7 @@ Connection state is persisted to `localStorage` (key: `xwagmi-store`) by Zustand
 - **NEAR / Stacks** — no auto-reconnect. The user must re-connect manually after a reload.
 - **Cleanup** — connections for chains no longer in `SodaxWalletProvider` config are removed via `cleanupDisabledConnections()` after persist hydration completes.
 
-To detect when persisted state is ready (avoid disconnect flash on first paint), use [`useConnectedChains`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) and gate UI on `status === 'ready'`.
+To detect when persisted state is ready (avoid disconnect flash on first paint), use [`useConnectedChains`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) and gate UI on `status === 'ready'`.
 
 ---
 
@@ -262,15 +262,15 @@ return (
 );
 ```
 
-For multi-chain modal flows that wrap connect with status + retry semantics, see [`WALLET_MODAL.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md).
+For multi-chain modal flows that wrap connect with status + retry semantics, see [`WALLET_MODAL.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md).
 
 ---
 
 ## Related docs
 
-- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — chain-type slots, opt-in mounting
-- [Wallet Provider Bridge](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` → typed `IXxxWalletProvider` for SDK calls
-- [Wallet Modal](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md) — headless state machine (chainSelect → walletSelect → connecting → success | error)
-- [Chain Detection](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) — aggregate connected-chain views + hydration status
-- [EVM Switch Chain](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md) — single wagmi connection across EVM networks
-- [Connectors](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector` contract, deep imports for concrete classes
+- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — chain-type slots, opt-in mounting
+- [Wallet Provider Bridge](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` → typed `IXxxWalletProvider` for SDK calls
+- [Wallet Modal](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md) — headless state machine (chainSelect → walletSelect → connecting → success | error)
+- [Chain Detection](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) — aggregate connected-chain views + hydration status
+- [EVM Switch Chain](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md) — single wagmi connection across EVM networks
+- [Connectors](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector` contract, deep imports for concrete classes

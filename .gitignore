@@ -1,0 +1,29 @@
+.DS_Store
+node_modules
+.turbo
+*.log
+dist
+dist-ssr
+*.local
+.env*
+.cache
+*.tsbuildinfo
+server/dist
+public/dist
+.history
+.idea
+**/build/**
+**/*.testnet.ts
+**/artifacts/**
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/docs/
+.claude/worktrees
+
+# Agent skills (local to VSCode)
+.agents/
+.github/skills/
+
+scripts/find_malicious_npm_packages.sh
+.pnpm-store/

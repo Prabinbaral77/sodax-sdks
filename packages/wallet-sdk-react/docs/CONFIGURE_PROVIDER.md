@@ -2,7 +2,7 @@
 
 Learn how to configure `<SodaxWalletProvider>` for your dApp. The provider is the root component for wallet connectivity — it mounts only the chain-type adapters you opt into, holds per-chain RPC + wallet defaults, and bridges to `@sodax/wallet-sdk-core` so SDK calls receive a typed wallet provider.
 
-The canonical TypeScript shape is [`SodaxWalletConfig`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/src/types/config.ts) in `@sodax/wallet-sdk-react`.
+The canonical TypeScript shape is [`SodaxWalletConfig`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/src/types/config.ts) in `@sodax/wallet-sdk-react`.
 
 ## Table of contents
 
@@ -205,7 +205,7 @@ The `defaults` field on each chain entry forwards directly to `wallet-sdk-core`'
 | `BITCOIN` | `BitcoinWalletDefaults` — `defaultFinalize` |
 | `NEAR` | `NearWalletDefaults` — `throwOnFailure`, `waitUntil`, `gasDefault`, `depositDefault` |
 
-Defaults merge **shallowly** — top-level keys only. Nested objects (e.g. `sendTransaction: { gas, maxFeePerGas }`) are replaced wholesale, not deep-merged. See [`packages/sdk/docs/WALLET_PROVIDERS.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) for full per-chain config reference.
+Defaults merge **shallowly** — top-level keys only. Nested objects (e.g. `sendTransaction: { gas, maxFeePerGas }`) are replaced wholesale, not deep-merged. See [`packages/sdk/docs/WALLET_PROVIDERS.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) for full per-chain config reference.
 
 ---
 
@@ -242,7 +242,7 @@ walletConnect: {
 }
 ```
 
-If `projectId` is missing, the WalletConnect connector is silently skipped and a warning is logged. See [`WALLETCONNECT.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) for the partner integration guide.
+If `projectId` is missing, the WalletConnect connector is silently skipped and a warning is logged. See [`WALLETCONNECT.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) for the partner integration guide.
 
 ---
 
@@ -275,7 +275,7 @@ This avoids subtle bugs where Zustand persistence, wagmi reconnect, and Hydrator
 
 ## Single source of truth — `ChainMeta`
 
-When adding a new chain type to the package, the only file you edit is [`ChainMeta`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/src/types/config.ts):
+When adding a new chain type to the package, the only file you edit is [`ChainMeta`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/src/types/config.ts):
 
 ```typescript
 export type ChainMeta = {
@@ -284,7 +284,7 @@ export type ChainMeta = {
 };
 ```
 
-`SodaxWalletConfig`, `ChainTypeConfig<T>`, `ChainEntry<K>`, `WalletDefaultsByKey<K>` all derive automatically from `ChainMeta`. See [`ADDING_A_NEW_CHAIN.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md) for the full chain-onboarding workflow.
+`SodaxWalletConfig`, `ChainTypeConfig<T>`, `ChainEntry<K>`, `WalletDefaultsByKey<K>` all derive automatically from `ChainMeta`. See [`ADDING_A_NEW_CHAIN.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md) for the full chain-onboarding workflow.
 
 ---
 
@@ -353,8 +353,8 @@ If a previous session connected a chain that is no longer in `config`, the persi
 
 ## Related docs
 
-- [Connect Flow](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — discover connectors, connect, read account, disconnect
-- [Wallet Provider Bridge](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` → typed `IXxxWalletProvider` for SDK calls
-- [WalletConnect](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) — enterprise/custody wallet setup (Fireblocks, etc.)
-- [Adding a New Chain](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md) — `ChainMeta` extension and chain registry
-- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — per-chain `defaults` shape reference
+- [Connect Flow](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — discover connectors, connect, read account, disconnect
+- [Wallet Provider Bridge](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` → typed `IXxxWalletProvider` for SDK calls
+- [WalletConnect](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) — enterprise/custody wallet setup (Fireblocks, etc.)
+- [Adding a New Chain](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md) — `ChainMeta` extension and chain registry
+- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — per-chain `defaults` shape reference

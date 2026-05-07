@@ -113,7 +113,7 @@ const result = await sodax.bridge.approve({
 
 ### Stellar Trustline Requirements
 
-For Stellar-based bridge operations, trustlines must be handled depending on whether Stellar is the source or destination chain. See the [Stellar Trustline Requirements](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#bridge) doc for detailed information and code examples.
+For Stellar-based bridge operations, trustlines must be handled depending on whether Stellar is the source or destination chain. See the [Stellar Trustline Requirements](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#bridge) doc for detailed information and code examples.
 
 ### bridge
 
@@ -529,7 +529,7 @@ The typical bridge operation follows this sequence:
 
 1. **Check allowance** using `isAllowanceValid()`
 2. **Approve tokens** using `approve()` if needed
-3. **For Stellar destination chains**: check and establish trustlines (see [Stellar Trustline Requirements](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#bridge))
+3. **For Stellar destination chains**: check and establish trustlines (see [Stellar Trustline Requirements](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#bridge))
 4. **Execute bridge** using `bridge()` for the full lifecycle, or `createBridgeIntent()` for manual relay control
 5. **Monitor progress** using the returned transaction hashes
 

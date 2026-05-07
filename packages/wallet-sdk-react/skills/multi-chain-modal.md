@@ -2,7 +2,7 @@
 
 Headless wallet-connect modal that walks the user through `chainSelect → walletSelect → connecting → success | error`. Pair with `useChainGroups` for the chain picker and `useXConnectors` for the wallet picker. Render-agnostic — works with any dialog/drawer/inline UI.
 
-**Depends on:** [setup.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/setup.md)
+**Depends on:** [setup.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/setup.md)
 
 ## Hooks
 
@@ -173,6 +173,6 @@ return (
 
 ## Reference docs
 
-- [Wallet Modal](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md) — full state machine + cancellation semantics
-- [Chain Detection](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) — `useChainGroups` + ordering
-- [Connect Flow](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — underlying `useXConnect` lifecycle
+- [Wallet Modal](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md) — full state machine + cancellation semantics
+- [Chain Detection](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CHAIN_DETECTION.md) — `useChainGroups` + ordering
+- [Connect Flow](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — underlying `useXConnect` lifecycle

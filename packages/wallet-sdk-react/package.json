@@ -7,10 +7,7 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "src"
-  ],
+  "files": ["dist", "src"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -25,14 +22,12 @@
   },
   "typesVersions": {
     "*": {
-      "xchains/*": [
-        "./dist/xchains/*/index.d.ts"
-      ]
+      "xchains/*": ["./dist/xchains/*/index.d.ts"]
     }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/icon-project/sodax-frontend"
+    "url": "https://github.com/icon-project/sodax-sdks"
   },
   "scripts": {
     "build": "NODE_OPTIONS=--max-old-space-size=8192 tsup",

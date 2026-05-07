@@ -1,0 +1,70 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**"],
+      "env": [
+        "NOTION_TOKEN",
+        "DATABASE_URI",
+        "BLOB_READ_WRITE_TOKEN",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "ALLOW_ADMIN_CREATION",
+        "SODAX_MONITOR_IP",
+        "SODAX_MONITOR_SECRET"
+      ]
+    },
+    "build:packages": {
+      "dependsOn": ["^build"],
+      "inputs": ["packages/**"],
+      "outputs": ["dist/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:packages": {
+      "dependsOn": ["^build"],
+      "inputs": ["packages/**"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": ["^lint"],
+      "cache": false
+    },
+    "lint:packages": {
+      "dependsOn": ["^lint"],
+      "inputs": ["packages/**"],
+      "cache": false
+    },
+    "checkTs": {
+      "dependsOn": ["^checkTs"]
+    },
+    "checkTs:packages": {
+      "dependsOn": ["^checkTs"],
+      "inputs": ["packages/**"]
+    },
+    "pretty": {
+      "dependsOn": ["^pretty"],
+      "cache": false
+    },
+    "check:circular-deps": {
+      "cache": false
+    },
+    "check:circular-deps:packages": {
+      "dependsOn": ["^check:circular-deps"],
+      "inputs": ["packages/**"]
+    }
+  },
+  "remoteCache": {
+    "enabled": true
+  }
+}

@@ -2,7 +2,7 @@
 
 Enable WalletConnect protocol on the EVM slot for partners using enterprise custody (Fireblocks, Ledger Live, mobile-only wallets). Default EVM discovery (EIP-6963) only finds browser-extension wallets — WalletConnect lets users pair via QR/deep-link.
 
-**Depends on:** [setup.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/setup.md)
+**Depends on:** [setup.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/setup.md)
 
 ## When to use
 
@@ -104,8 +104,8 @@ The `walletConnect` field only exists on the `EVM` slot. Solana, Bitcoin, etc. u
 
 ## Reference docs
 
-- [WalletConnect](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) — full integration reference
-- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md#walletconnect-evm-only) — per-chain config
-- [Wallet Modal QR caveat](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md#walletconnect-qr-modal-caveat) — modal stacking handling
+- [WalletConnect](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLETCONNECT.md) — full integration reference
+- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md#walletconnect-evm-only) — per-chain config
+- [Wallet Modal QR caveat](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_MODAL.md#walletconnect-qr-modal-caveat) — modal stacking handling
 - [wagmi `WalletConnectParameters`](https://wagmi.sh/core/api/connectors/walletConnect) — full options reference
 - [WalletConnect Cloud](https://cloud.walletconnect.com) — get a `projectId`

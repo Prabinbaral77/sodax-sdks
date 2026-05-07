@@ -77,7 +77,7 @@ const { mutateAsync: connect } = useXConnect();
 await connect(connector);
 ```
 
-For provider-managed chains (EVM/Solana/Sui), the resolved value is `undefined` — read the connected account via `useXAccount` after the mutation lands. See [Connect Flow caveat](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md#provider-managed-chains-caveat).
+For provider-managed chains (EVM/Solana/Sui), the resolved value is `undefined` — read the connected account via `useXAccount` after the mutation lands. See [Connect Flow caveat](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md#provider-managed-chains-caveat).
 
 ### Persisted connections
 

@@ -94,14 +94,14 @@ If you also use `@sodax/dapp-kit` for SDK feature hooks, mount `SodaxProvider` o
 </SodaxProvider>
 ```
 
-See [`packages/dapp-kit/skills/setup.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/dapp-kit/skills/setup.md) for the dapp-kit side.
+See [`packages/dapp-kit/skills/setup.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/dapp-kit/skills/setup.md) for the dapp-kit side.
 
 ## Next steps
 
-- [`connect-button.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/connect-button.md) — single-chain connect/disconnect button
-- [`multi-chain-modal.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/multi-chain-modal.md) — multi-chain headless wallet modal
-- [`bridge-to-sdk.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/bridge-to-sdk.md) — pass `walletProvider` to `@sodax/sdk` calls
+- [`connect-button.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/connect-button.md) — single-chain connect/disconnect button
+- [`multi-chain-modal.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/multi-chain-modal.md) — multi-chain headless wallet modal
+- [`bridge-to-sdk.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/bridge-to-sdk.md) — pass `walletProvider` to `@sodax/sdk` calls
 
 ## Reference docs
 
-- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — full config reference, breaking changes from v1, per-chain `defaults`
+- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — full config reference, breaking changes from v1, per-chain `defaults`

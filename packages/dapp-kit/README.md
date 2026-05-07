@@ -291,5 +291,5 @@ See [`skills/SKILLS.md`](skills/SKILLS.md) for AI-agent-friendly guides to scaff
 
 ## Support
 
-- [GitHub Issues](https://github.com/icon-project/sodax-frontend/issues)
+- [GitHub Issues](https://github.com/icon-project/sodax-sdks/issues)
 - [Discord Community](https://discord.gg/sodax-formerly-icon-880651922682560582)

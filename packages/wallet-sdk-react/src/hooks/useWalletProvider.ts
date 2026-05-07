@@ -26,7 +26,7 @@ const warnedChains = new Set<ChainType>();
  * Hydrator whenever the underlying client changes (chain switch, wallet swap). For
  * non-provider chains, the provider is created as a side-effect of `setXConnection`.
  *
- * @see {@link https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md | Wallet Provider Bridge}
+ * @see {@link https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md | Wallet Provider Bridge}
  */
 export function useWalletProvider<S extends SpokeChainKey>(options: { xChainId: S; xChainType?: never }):
   | GetWalletProviderType<GetChainType<S>>

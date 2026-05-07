@@ -24,7 +24,7 @@ const warnedChains = new Set<ChainType>();
  * first. `preferred` matches by exact `connector.id` — for substring/case-insensitive matching,
  * use `useIsWalletInstalled`.
  *
- * @see {@link https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md#discover-connectors | Connect Flow — Discover}
+ * @see {@link https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md#discover-connectors | Connect Flow — Discover}
  */
 export function useXConnectors({ xChainType }: UseXConnectorsOptions = {}): IXConnector[] {
   return useXWalletStore(state => {

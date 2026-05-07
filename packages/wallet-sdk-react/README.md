@@ -160,5 +160,5 @@ Contributions welcome — see the repo [Contributing Guide](../../CONTRIBUTING.m
 
 ## Support
 
-- [GitHub Issues](https://github.com/icon-project/sodax-frontend/issues)
+- [GitHub Issues](https://github.com/icon-project/sodax-sdks/issues)
 - [Discord Community](https://discord.gg/sodax-formerly-icon-880651922682560582)

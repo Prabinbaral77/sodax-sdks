@@ -122,5 +122,5 @@ pnpm lint
 
 ## Support
 
-* [GitHub Issues](https://github.com/icon-project/sodax-frontend/issues)
+* [GitHub Issues](https://github.com/icon-project/sodax-sdks/issues)
 * [Discord Community](https://discord.gg/xM2Nh4S6vN)

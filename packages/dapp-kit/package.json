@@ -10,7 +10,7 @@
   "files": ["dist", "src", "skills"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/icon-project/sodax-frontend"
+    "url": "https://github.com/icon-project/sodax-sdks"
   },
   "scripts": {
     "build": "tsup",

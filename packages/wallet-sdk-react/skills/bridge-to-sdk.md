@@ -2,7 +2,7 @@
 
 Pass the user's connected wallet to `@sodax/sdk` calls — `useWalletProvider` returns a typed `IXxxWalletProvider` ready to plug into any SDK method.
 
-**Depends on:** [setup.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/setup.md), one of [connect-button.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/connect-button.md) / [multi-chain-modal.md](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/skills/multi-chain-modal.md)
+**Depends on:** [setup.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/setup.md), one of [connect-button.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/connect-button.md) / [multi-chain-modal.md](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/skills/multi-chain-modal.md)
 
 ## Hooks
 
@@ -59,7 +59,7 @@ sodax.staking.stake({ params, walletProvider });
 sodax.dex.deposit({ params, walletProvider });
 ```
 
-See [`packages/sdk/docs/`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/) for per-feature method signatures.
+See [`packages/sdk/docs/`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/) for per-feature method signatures.
 
 ## TypeScript narrowing
 
@@ -83,7 +83,7 @@ The chain-narrowing is automatic — passing the wrong wallet provider type to a
 
 ## EVM — single connection across all networks
 
-`useWalletProvider({ xChainId: ChainKeys.BSC_MAINNET })` and `useWalletProvider({ xChainId: ChainKeys.ARBITRUM_MAINNET })` return the **same** `EvmWalletProvider` instance — wagmi maintains one connection across all configured EVM networks. To switch the **active** EVM network, see [`useEvmSwitchChain`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md):
+`useWalletProvider({ xChainId: ChainKeys.BSC_MAINNET })` and `useWalletProvider({ xChainId: ChainKeys.ARBITRUM_MAINNET })` return the **same** `EvmWalletProvider` instance — wagmi maintains one connection across all configured EVM networks. To switch the **active** EVM network, see [`useEvmSwitchChain`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md):
 
 ```tsx
 import { useEvmSwitchChain } from '@sodax/wallet-sdk-react';
@@ -119,7 +119,7 @@ const result = await sodax.swaps.createIntent({
 // result.value.tx is an EvmRawTransaction
 ```
 
-See [`packages/sdk/docs/SWAPS.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/SWAPS.md) for the full raw-vs-signed matrix per method.
+See [`packages/sdk/docs/SWAPS.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/SWAPS.md) for the full raw-vs-signed matrix per method.
 
 ## Server / scripts — use `@sodax/wallet-sdk-core` directly
 
@@ -141,8 +141,8 @@ const result = await sodax.swaps.swap({ params, walletProvider });
 
 ## Reference docs
 
-- [Wallet Provider Bridge](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` + `useXService` reference
-- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — per-chain `IXxxWalletProvider` interfaces
-- [SDK Swaps](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/SWAPS.md) — example consumer of a wallet provider
-- [EVM Switch Chain](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md) — switch active EVM network
-- [`packages/dapp-kit`](https://github.com/icon-project/sodax-frontend/blob/main/packages/dapp-kit/README.md) — higher-level React hooks that wrap SDK calls + `useWalletProvider`
+- [Wallet Provider Bridge](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/WALLET_PROVIDER_BRIDGE.md) — `useWalletProvider` + `useXService` reference
+- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — per-chain `IXxxWalletProvider` interfaces
+- [SDK Swaps](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/SWAPS.md) — example consumer of a wallet provider
+- [EVM Switch Chain](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/EVM_SWITCH_CHAIN.md) — switch active EVM network
+- [`packages/dapp-kit`](https://github.com/icon-project/sodax-sdks/blob/main/packages/dapp-kit/README.md) — higher-level React hooks that wrap SDK calls + `useWalletProvider`

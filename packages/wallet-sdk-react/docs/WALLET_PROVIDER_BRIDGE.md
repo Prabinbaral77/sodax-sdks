@@ -2,7 +2,7 @@
 
 `@sodax/wallet-sdk-react` is the bridge between the connected browser wallet and the chain-agnostic SDK call surface in `@sodax/sdk`. After a user connects a wallet, `useWalletProvider` returns a typed `IXxxWalletProvider` (from `@sodax/sdk`) that you pass directly into any SDK method — the SDK signs and broadcasts via that provider.
 
-The canonical interfaces are defined in [`@sodax/sdk`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/src/index.ts) (`IEvmWalletProvider`, `ISolanaWalletProvider`, …) and re-exported through `@sodax/wallet-sdk-core`.
+The canonical interfaces are defined in [`@sodax/sdk`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/src/index.ts) (`IEvmWalletProvider`, `ISolanaWalletProvider`, …) and re-exported through `@sodax/wallet-sdk-core`.
 
 ## Table of contents
 
@@ -18,7 +18,7 @@ The canonical interfaces are defined in [`@sodax/sdk`](https://github.com/icon-p
 
 ## Why a bridge layer
 
-`@sodax/sdk` is wallet-library-agnostic — it accepts any object implementing the per-chain `IXxxWalletProvider` interface (see [`packages/sdk/docs/WALLET_PROVIDERS.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md)). The implementation can come from:
+`@sodax/sdk` is wallet-library-agnostic — it accepts any object implementing the per-chain `IXxxWalletProvider` interface (see [`packages/sdk/docs/WALLET_PROVIDERS.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md)). The implementation can come from:
 
 - **Browser dApp** — `@sodax/wallet-sdk-react` Hydrators wrap `wagmi` / `@solana/wallet-adapter` / `@mysten/dapp-kit` etc. into provider instances and store them in the Zustand store. `useWalletProvider` reads them out.
 - **Server / script / bot** — `@sodax/wallet-sdk-core` exposes the same provider classes (`EvmWalletProvider`, `SolanaWalletProvider`, …) constructed directly from a private key. No React, no wallet-sdk-react.
@@ -112,7 +112,7 @@ function SwapButton({ params }: { params: CreateIntentParams<typeof ChainKeys.BS
 }
 ```
 
-The same pattern works for every SDK feature service — `sodax.bridge.bridge`, `sodax.moneyMarket.supply`, `sodax.staking.stake`, `sodax.dex.deposit`, etc. See [`packages/sdk/docs/`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/) for per-feature method signatures.
+The same pattern works for every SDK feature service — `sodax.bridge.bridge`, `sodax.moneyMarket.supply`, `sodax.staking.stake`, `sodax.dex.deposit`, etc. See [`packages/sdk/docs/`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/) for per-feature method signatures.
 
 ---
 
@@ -135,7 +135,7 @@ const allServices = useXServices();
 // allServices: Partial<Record<ChainType, XService>>
 ```
 
-For typed access, depend on the public [`IXService`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/src/types/interfaces.ts) interface rather than the concrete `XService` class. Concrete classes (`EvmXService`, `BitcoinXService`, …) are not exported from the package barrel; if you need a concrete class for `instanceof`, use the deep-import sub-path — see [`CONNECTORS.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md).
+For typed access, depend on the public [`IXService`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/src/types/interfaces.ts) interface rather than the concrete `XService` class. Concrete classes (`EvmXService`, `BitcoinXService`, …) are not exported from the package barrel; if you need a concrete class for `instanceof`, use the deep-import sub-path — see [`CONNECTORS.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md).
 
 ---
 
@@ -212,15 +212,15 @@ const result = await sodax.swaps.createIntent({
 });
 ```
 
-See [`packages/sdk/docs/SWAPS.md`](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/SWAPS.md) for the full raw-vs-signed matrix per method.
+See [`packages/sdk/docs/SWAPS.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/SWAPS.md) for the full raw-vs-signed matrix per method.
 
 ---
 
 ## Related docs
 
-- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — chain-type slots and per-chain wallet defaults
-- [Connect Flow](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — discover, connect, read, disconnect
-- [Connectors](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector`, deep imports, custom connectors
-- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — `IXxxWalletProvider` interfaces, custom implementations
-- [SDK Swaps](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/SWAPS.md) — example consumer of a wallet provider
-- [`@sodax/wallet-sdk-core`](https://github.com/icon-project/sodax-frontend/blob/main/packages/wallet-sdk-core/README.md) — Node-side provider construction
+- [Configure SodaxWalletProvider](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONFIGURE_PROVIDER.md) — chain-type slots and per-chain wallet defaults
+- [Connect Flow](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECT_FLOW.md) — discover, connect, read, disconnect
+- [Connectors](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/CONNECTORS.md) — `IXConnector`, deep imports, custom connectors
+- [SDK Wallet Providers Reference](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/WALLET_PROVIDERS.md) — `IXxxWalletProvider` interfaces, custom implementations
+- [SDK Swaps](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/SWAPS.md) — example consumer of a wallet provider
+- [`@sodax/wallet-sdk-core`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-core/README.md) — Node-side provider construction
