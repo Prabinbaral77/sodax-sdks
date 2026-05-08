@@ -2,10 +2,6 @@ import { useEffect, useRef } from 'react';
 import { useConfig, useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { useXWalletStore } from '@/useXWalletStore.js';
 
-/**
- * Registers EVM ChainActions into the store.
- * Uses refs to hold latest wagmi hook values — registers once on mount.
- */
 export const EvmActions = () => {
   const wagmiConfig = useConfig();
   const { connectAsync } = useConnect();
@@ -18,7 +14,6 @@ export const EvmActions = () => {
   const signMessageRef = useRef(signMessageAsync);
   const wagmiConfigRef = useRef(wagmiConfig);
 
-  // Sync all wagmi hook refs in a single effect to avoid 4 separate effect commits per render.
   useEffect(() => {
     connectRef.current = connectAsync;
     disconnectRef.current = disconnectAsync;
@@ -37,13 +32,30 @@ export const EvmActions = () => {
           );
           return undefined;
         }
-        await connectRef.current({ connector });
-        // EVM connection state is set by EvmHydrator (single writer for provider-managed chains)
+        // Clear flag before awaiting — flips re-fire EvmHydrator's effects, surfacing
+        // any pre-existing wagmi connection (ghost auto-reconnect).
+        useXWalletStore.getState().clearUserDisconnected('EVM');
+        try {
+          await connectRef.current({ connector });
+        } catch (error) {
+          if (error instanceof Error && error.name === 'ConnectorAlreadyConnectedError') {
+            return undefined;
+          }
+          throw error;
+        }
         return undefined;
       },
       disconnect: async () => {
-        await disconnectRef.current();
-        // EVM disconnection state is cleared by EvmHydrator (single writer for provider-managed chains)
+        // Clear zustand + flag synchronously so UI is consistent regardless of whether
+        // wagmi.disconnect() throws (Hana 4200), hangs (WC relay), or succeeds.
+        const store = useXWalletStore.getState();
+        store.unsetXConnection('EVM');
+        store.markUserDisconnected('EVM');
+        try {
+          await disconnectRef.current();
+        } catch (error) {
+          console.warn('[EvmActions] wagmi disconnect failed (zustand already cleared):', error);
+        }
       },
       getConnectors: () => useXWalletStore.getState().xConnectorsByChain.EVM ?? [],
       getConnection: () => useXWalletStore.getState().xConnections.EVM,
