@@ -1,6 +1,6 @@
 # @sodax/wallet-sdk-react
 
-React layer over [`@sodax/wallet-sdk-core`](../wallet-sdk-core/README.md) — wallet connection, signing, and account management for the SODAX cross-chain ecosystem. Hooks read from a single Zustand store; per-chain native SDKs (wagmi, `@solana/wallet-adapter`, `@mysten/dapp-kit`, …) are wrapped behind a uniform `IXService` / `IXConnector` interface.
+React layer over [`@sodax/wallet-sdk-core`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-core/README.md) — wallet connection, signing, and account management for the SODAX cross-chain ecosystem. Hooks read from a single Zustand store; per-chain native SDKs (wagmi, `@solana/wallet-adapter`, `@mysten/dapp-kit`, …) are wrapped behind a uniform `IXService` / `IXConnector` interface.
 
 ## Features
 
@@ -113,7 +113,7 @@ The full guide lives in [`docs/`](docs/). Start with the topic that matches what
 | [EVM Switch Chain](docs/EVM_SWITCH_CHAIN.md) | Single wagmi connection across all configured EVM networks |
 | [Connectors](docs/CONNECTORS.md) | `IXConnector` contract, deep-import concrete classes, custom connectors |
 | [Architecture](docs/ARCHITECTURE.md) | Zustand store, Provider/Hydrator/Actions trio, persist hydration caveat |
-| [Adding a New Chain](docs/ADDING_A_NEW_CHAIN.md) | `ChainMeta` extension, chain registry, sub-path export wiring |
+| [Adding a New Chain](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md) | `ChainMeta` extension, chain registry, sub-path export wiring |
 
 ## AI agent docs
 
@@ -165,7 +165,7 @@ pnpm lint        # Lint code
 
 ## Contributing
 
-Contributions welcome — see the repo [Contributing Guide](../../CONTRIBUTING.md). For onboarding a new chain family, follow [`docs/ADDING_A_NEW_CHAIN.md`](docs/ADDING_A_NEW_CHAIN.md).
+Contributions welcome — see the repo [Contributing Guide](https://github.com/icon-project/sodax-sdks/blob/main/CONTRIBUTING.md). For onboarding a new chain family, follow [`docs/ADDING_A_NEW_CHAIN.md`](https://github.com/icon-project/sodax-sdks/blob/main/packages/wallet-sdk-react/docs/ADDING_A_NEW_CHAIN.md).
 
 ## License
 
