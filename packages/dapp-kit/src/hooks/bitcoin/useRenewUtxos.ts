@@ -1,72 +1,52 @@
-import { normalizePsbtToBase64, type BitcoinSpokeProvider } from '@sodax/sdk';
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import { loadRadfiSession } from './useRadfiAuth';
+// packages/dapp-kit/src/hooks/bitcoin/useRenewUtxos.ts
+import { normalizePsbtToBase64, type IBitcoinWalletProvider } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { loadRadfiSession } from './useRadfiAuth.js';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
 
-type RenewUtxosParams = {
+export type UseRenewUtxosVars = {
   txIdVouts: string[];
+  walletProvider: IBitcoinWalletProvider;
 };
 
 /**
- * Hook to renew expired UTXOs in the Radfi trading wallet.
- *
- * Flow:
- * 1. Build renew-utxo transaction via Radfi API (returns unsigned PSBT)
- * 2. User signs the PSBT with their wallet
- * 3. Submit signed PSBT back to Radfi for co-signing and broadcasting
- *
- * @example
- * ```tsx
- * const { mutateAsync: renewUtxos, isPending } = useRenewUtxos(spokeProvider);
- *
- * const handleRenew = async (expiredUtxos: RadfiUtxo[]) => {
- *   const txIdVouts = expiredUtxos.map(u => u.txidVout);
- *   const txId = await renewUtxos({ txIdVouts });
- *   console.log('Renewed:', txId);
- * };
- * ```
+ * React hook for renewing expired UTXOs in the user's Radfi trading wallet. Pure mutation: pass
+ * `{ txIdVouts, walletProvider }` to `mutate({...})`.
  */
-export function useRenewUtxos(
-  spokeProvider: BitcoinSpokeProvider | undefined,
-): UseMutationResult<string, Error, RenewUtxosParams> {
+export function useRenewUtxos({
+  mutationOptions,
+}: MutationHookParams<string, UseRenewUtxosVars> = {}): SafeUseMutationResult<string, Error, UseRenewUtxosVars> {
+  const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation<string, Error, RenewUtxosParams>({
-    mutationFn: async ({ txIdVouts }: RenewUtxosParams) => {
-      if (!spokeProvider) {
-        throw new Error('Bitcoin spoke provider not found');
-      }
+  return useSafeMutation<string, Error, UseRenewUtxosVars>({
+    mutationKey: ['bitcoin', 'renewUtxos'],
+    ...mutationOptions,
+    mutationFn: async ({ txIdVouts, walletProvider }) => {
+      const radfi = sodax.spokeService.bitcoinSpokeService.radfi;
 
-      const userAddress = await spokeProvider.walletProvider.getWalletAddress();
+      const userAddress = await walletProvider.getWalletAddress();
       const session = loadRadfiSession(userAddress);
-      const accessToken = session?.accessToken || spokeProvider.radfiAccessToken;
+      const accessToken = session?.accessToken || radfi.accessToken;
 
       if (!accessToken) {
         throw new Error('Radfi authentication required. Please login first.');
       }
 
-      // Step 1: Build the renew-utxo transaction
-      const buildResult = await spokeProvider.radfi.buildRenewUtxoTransaction(
-        { userAddress, txIdVouts },
-        accessToken,
-      );
+      const buildResult = await radfi.buildRenewUtxoTransaction({ userAddress, txIdVouts }, accessToken);
 
-      // Step 2: Sign the PSBT with user's wallet
-      const signedTx = await spokeProvider.walletProvider.signTransaction(
-        buildResult.base64Psbt,
-        false,
-      );
+      const signedTx = await walletProvider.signTransaction(buildResult.base64Psbt, false);
 
       const signedBase64Tx = normalizePsbtToBase64(signedTx);
 
-      // Step 3: Submit to Radfi for co-signing and broadcasting
-      return spokeProvider.radfi.signAndBroadcastRenewUtxo(
-        { userAddress, signedBase64Tx },
-        accessToken,
-      );
+      return radfi.signAndBroadcastRenewUtxo({ userAddress, signedBase64Tx }, accessToken);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['expired-utxos'] });
-      queryClient.invalidateQueries({ queryKey: ['trading-wallet-balance'] });
+    onSuccess: async (data, vars, ctx) => {
+      queryClient.invalidateQueries({ queryKey: ['bitcoin', 'expiredUtxos'] });
+      queryClient.invalidateQueries({ queryKey: ['bitcoin', 'tradingWalletBalance'] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

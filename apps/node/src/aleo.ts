@@ -1,128 +1,85 @@
 import 'dotenv/config';
 import type { Address, Hex } from 'viem';
 import {
-  AleoSpokeProvider,
   AleoSpokeService,
   EvmAssetManagerService,
-  EvmHubProvider,
-  EvmWalletAbstraction,
   spokeChainConfig,
-  type AleoSpokeChainConfig,
-  type EvmHubProviderConfig,
-  type SodaxConfig,
   Sodax,
-  getHubChainConfig,
-  getMoneyMarketConfig,
+  encodeContractCalls,
   encodeAddress,
-  type SolverConfigParams,
+  type SodaxConfig,
+  type AleoSpokeChainConfig,
+  type SonicSpokeChainConfig,
+  type DeepPartial,
+  type HttpUrl,
+  type AleoNetworkEnv,
+  ChainKeys,
+  HUB_CHAIN_KEY,
+  getIntentRelayChainId,
 } from '@sodax/sdk';
 import { AleoWalletProvider } from '@sodax/wallet-sdk-core';
-import {
-  ALEO_MAINNET_CHAIN_ID,
-  SONIC_MAINNET_CHAIN_ID,
-  type SonicSpokeChainConfig,
-  type HubChainId,
-  type HttpUrl,
-  getIntentRelayChainId,
-} from '@sodax/types';
 
-const ALEO_CHAIN_ID = ALEO_MAINNET_CHAIN_ID;
-const aleoChainConfig = spokeChainConfig[ALEO_CHAIN_ID] as AleoSpokeChainConfig;
+const ALEO_CHAIN_KEY = ChainKeys.ALEO_MAINNET;
+const HUB_CHAIN_KEY_VALUE = HUB_CHAIN_KEY;
+const aleoChainConfig = spokeChainConfig[ALEO_CHAIN_KEY] as AleoSpokeChainConfig;
+const destinationChainConfig = spokeChainConfig[HUB_CHAIN_KEY_VALUE] as SonicSpokeChainConfig;
 const ALEO_RPC_URL = process.env.ALEO_RPC_URL || aleoChainConfig.rpcUrl;
 const ALEO_PRIVATE_KEY = process.env.ALEO_PRIVATE_KEY;
-const HUB_CHAIN_ID: HubChainId = SONIC_MAINNET_CHAIN_ID;
 const PROVABLE_API_KEY = process.env.PROVABLE_API_KEY;
 const PROVABLE_CONSUMER_ID = process.env.PROVABLE_CONSUMER_ID;
-const PROVABLE_DELEGATE_URL = process.env.PROVABLE_DELEGATE_URL;
 const HUB_RPC_URL = process.env.HUB_RPC_URL || 'https://rpc.soniclabs.com';
-const RELAYER_API_ENDPOINT = process.env.RELAYER_API_ENDPOINT as HttpUrl;
-const destinationChainConfig = spokeChainConfig[SONIC_MAINNET_CHAIN_ID] as SonicSpokeChainConfig;
-const IS_TESTNET = process.env.IS_TESTNET;
+const RELAYER_API_ENDPOINT = process.env.RELAYER_API_ENDPOINT as HttpUrl | undefined;
+const IS_TESTNET = process.env.IS_TESTNET === 'true';
+const ALEO_NETWORK: AleoNetworkEnv = IS_TESTNET ? 'testnet' : 'mainnet';
+
 if (!ALEO_PRIVATE_KEY) throw new Error('ALEO_PRIVATE_KEY is required');
 if (!ALEO_PRIVATE_KEY.startsWith('APrivateKey1')) throw new Error('Invalid ALEO_PRIVATE_KEY');
 if (!PROVABLE_API_KEY) throw new Error('PROVABLE_API_KEY is required');
 if (!PROVABLE_CONSUMER_ID) throw new Error('PROVABLE_CONSUMER_ID is required');
-const solverConfig = {
-  intentsContract: '0x6382D6ccD780758C5e8A6123c33ee8F4472F96ef',
-  solverApiEndpoint: 'https://sodax-solver-staging.iconblockchain.xyz',
-  partnerFee: undefined,
-} satisfies SolverConfigParams;
 
 const aleoWalletProvider = new AleoWalletProvider({
   type: 'privateKey',
   rpcUrl: ALEO_RPC_URL,
   privateKey: ALEO_PRIVATE_KEY,
-  network: IS_TESTNET === 'true' ? 'testnet' : 'mainnet',
+  network: ALEO_NETWORK,
   delegate: {
     apiKey: PROVABLE_API_KEY,
     consumerId: PROVABLE_CONSUMER_ID,
   },
 });
 
-const hubConfig = {
-  hubRpcUrl: HUB_RPC_URL,
-  chainConfig: getHubChainConfig(),
-} satisfies EvmHubProviderConfig;
+const sodaxConfigOverrides: DeepPartial<SodaxConfig> = {
+  hub: { rpcUrl: HUB_RPC_URL },
+  ...(RELAYER_API_ENDPOINT ? { relay: { relayerApiEndpoint: RELAYER_API_ENDPOINT } } : {}),
+};
 
-const moneyMarketConfig = getMoneyMarketConfig(HUB_CHAIN_ID);
+const sodax = new Sodax(sodaxConfigOverrides);
+const hubProvider = sodax.hubProvider;
+// Build a network-aware AleoSpokeService for testnet runs; the default service in
+// sodax.spokeService.aleoSpokeService is locked to mainnet.
+const aleoSpokeService = IS_TESTNET ? new AleoSpokeService(sodax.config, 'testnet') : sodax.spokeService.aleoSpokeService;
 
-const sodax = new Sodax({
-  swaps: solverConfig,
-  hubProviderConfig: hubConfig,
-  relayerApiEndpoint: RELAYER_API_ENDPOINT,
-} satisfies SodaxConfig);
-
-const hubProvider = new EvmHubProvider({
-  config: hubConfig,
-  configService: sodax.config,
-});
-
-const aleoSpokeProvider = new AleoSpokeProvider(aleoChainConfig, aleoWalletProvider, ALEO_RPC_URL);
-
-async function submitData(tx_hash: string, address: Address, payload: Hex | null) {
-  let data = {};
-  if (payload == null) {
-    data = {
-      action: 'submit',
-      params: {
-        chain_id: String(getIntentRelayChainId(aleoChainConfig.chain.id)),
-        tx_hash: tx_hash,
-      },
-    };
-  } else {
-    data = {
-      action: 'submit',
-      params: {
-        chain_id: String(getIntentRelayChainId(aleoChainConfig.chain.id)),
-        tx_hash: tx_hash,
-        data: {
-          address: address,
-          payload: payload,
-        },
-      },
-    };
+async function submitData(tx_hash: string, address: Address, payload: Hex | null): Promise<unknown> {
+  if (!RELAYER_API_ENDPOINT) {
+    console.warn('RELAYER_API_ENDPOINT not set — skipping relay submission');
+    return null;
   }
+
+  const relayChainId = String(getIntentRelayChainId(ALEO_CHAIN_KEY));
+  const data =
+    payload == null
+      ? { action: 'submit', params: { chain_id: relayChainId, tx_hash } }
+      : { action: 'submit', params: { chain_id: relayChainId, tx_hash, data: { address, payload } } };
 
   try {
     const request = {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     };
-    console.log('HTTP Request:', {
-      RELAYER_API_ENDPOINT,
-      method: request.method,
-      headers: request.headers,
-      body: request.body,
-    });
+    console.log('HTTP Request:', { RELAYER_API_ENDPOINT, ...request });
     const response = await fetch(RELAYER_API_ENDPOINT, request);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
     const result = await response.json();
     console.log('Response:', result);
     return result;
@@ -132,119 +89,118 @@ async function submitData(tx_hash: string, address: Address, payload: Hex | null
   }
 }
 
-async function getUserWallet() {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
+async function getUserHubWallet(): Promise<Address> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
   console.log('WalletAddress: ', walletAddress);
-  const walletAddressBytes = encodeAddress(aleoSpokeProvider.chainConfig.chain.id, walletAddress);
-  console.log('chainId: ', aleoSpokeProvider.chainConfig.chain.id);
-  return await EvmWalletAbstraction.getUserHubWalletAddress(
-    aleoSpokeProvider.chainConfig.chain.id,
-    walletAddressBytes,
-    hubProvider,
-  );
+  console.log('chainKey: ', ALEO_CHAIN_KEY);
+  return hubProvider.getUserHubWalletAddress(walletAddress, ALEO_CHAIN_KEY);
 }
 
-// Approve and deposit the underlying asset token and then mint shares to the recipient address (user's hub wallet)
-async function depositTo(token: string, amount: bigint, recipient: Address) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-  const data = '0x';
-  const txId = await AleoSpokeService.deposit(
-    {
-      from: walletAddress,
-      token,
-      amount,
-      data,
-    },
-    aleoSpokeProvider,
-    hubProvider,
-  );
-  const userWallet = await getUserWallet();
-  console.log('userWallet ✌️:', userWallet);
+async function depositTo(token: string, amount: bigint, _recipient: Address): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const userHubWallet = await getUserHubWallet();
+  console.log('userHubWallet ✌️:', userHubWallet);
 
-  const res = await submitData(txId, userWallet, null);
+  const txId = await aleoSpokeService.deposit<false>({
+    srcChainKey: ALEO_CHAIN_KEY,
+    srcAddress: walletAddress,
+    to: userHubWallet,
+    token,
+    amount,
+    data: '0x',
+    raw: false,
+    walletProvider: aleoWalletProvider,
+    feeAmount: BigInt(0),
+  }, hubProvider);
+
+  const res = await submitData(txId, userHubWallet, null);
   console.log(res);
-
   console.log('[depositTo] txId', txId);
 }
 
-async function withdrawAsset(token: string, amount: number, recipient: string) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-  const walletAddressBytes = encodeAddress(aleoSpokeProvider.chainConfig.chain.id, walletAddress);
-  const hubWallet = await EvmWalletAbstraction.getUserHubWalletAddress(
-    aleoSpokeProvider.chainConfig.chain.id,
-    walletAddressBytes,
-    hubProvider,
-  );
+async function withdrawAsset(token: string, amount: number, recipient: string): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const userHubWallet = await getUserHubWallet();
 
-  const data = EvmAssetManagerService.withdrawAssetData(
+  const transferCalldata = EvmAssetManagerService.withdrawAssetData(
     {
       token,
-      to: encodeAddress(aleoSpokeProvider.chainConfig.chain.id, recipient),
+      to: encodeAddress(ALEO_CHAIN_KEY, recipient),
       amount: BigInt(amount),
     },
     hubProvider,
-    aleoSpokeProvider.chainConfig.chain.id,
+    ALEO_CHAIN_KEY,
   );
 
-  const txId = await AleoSpokeService.callWallet(hubWallet, data, aleoSpokeProvider, hubProvider);
-  const res = await submitData(txId, hubWallet, data);
+  const payload = encodeContractCalls([
+    { address: hubProvider.chainConfig.addresses.assetManager, value: 0n, data: transferCalldata },
+  ]);
+
+  const txId = await aleoSpokeService.sendMessage<false>({
+    srcChainKey: ALEO_CHAIN_KEY,
+    srcAddress: walletAddress,
+    dstChainKey: HUB_CHAIN_KEY_VALUE,
+    dstAddress: userHubWallet,
+    payload,
+    raw: false,
+    walletProvider: aleoWalletProvider,
+  });
+
+  const res = await submitData(txId, userHubWallet, payload);
   console.log('Response: ', res);
   console.log('[withdrawAsset] txId', txId);
 }
 
-async function createIntent(amount: number, inputToken: string, outputToken: string) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-  const userWallet = await getUserWallet();
+async function createIntent(amount: number, inputToken: string, outputToken: string): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const userHubWallet = await getUserHubWallet();
 
-  const result = await sodax.swaps.createIntent({
-    intentParams: {
+  const result = await sodax.swaps.createIntent<typeof ALEO_CHAIN_KEY, false>({
+    params: {
       inputToken,
       outputToken,
       inputAmount: BigInt(amount),
       minOutputAmount: 0n,
       deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
       allowPartialFill: false,
-      srcChain: aleoSpokeProvider.chainConfig.chain.id,
-      //   dstChain: aleoSpokeProvider.chainConfig.chain.id,
-      dstChain: destinationChainConfig.chain.id,
+      srcChainKey: ALEO_CHAIN_KEY,
+      dstChainKey: destinationChainConfig.chain.key,
       srcAddress: walletAddress,
       dstAddress: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
       solver: '0x0000000000000000000000000000000000000000',
       data: '0x',
     },
-    spokeProvider: aleoSpokeProvider,
+    raw: false,
+    walletProvider: aleoWalletProvider,
+    skipSimulation: true,
   });
 
   if (!result.ok) {
     console.error('[createIntent] Failed:', result.error);
-    throw new Error(`createIntent failed: ${result.error.code}`);
+    throw new Error('createIntent failed');
   }
 
-  const [txId, intent, data] = result.value;
+  const { tx: txId, intent, relayData } = result.value;
   console.log('[createIntent] txId:', txId);
   console.log('[createIntent] intentId:', intent.intentId);
 
-  // Step 2: Submit spoke tx + intent data to the relayer
-  const res = await submitData(txId as string, userWallet, data);
+  const res = await submitData(txId, userHubWallet, relayData.payload);
   console.log('[createIntent] submitData response:', res);
 
-  // Step 3: Wait until the relayer executes the intent on the hub chain
-  const intentRelayChainId = getIntentRelayChainId(aleoSpokeProvider.chainConfig.chain.id).toString();
-  console.log('[createIntent] waiting for relay execution (intentRelayChainId:', intentRelayChainId, ')...');
+  console.log('[createIntent] waiting for relay execution...');
   const packetResult = await sodax.swaps.getSolvedIntentPacket({
-    chainId: aleoSpokeProvider.chainConfig.chain.id,
-    fillTxHash: txId as string,
+    chainId: ALEO_CHAIN_KEY,
+    fillTxHash: txId,
   });
 
   if (!packetResult.ok) {
     console.error('[createIntent] relay wait failed:', packetResult.error);
-    throw new Error(`createIntent relay failed: ${packetResult.error.code}`);
+    throw new Error('createIntent relay failed');
   }
 
   const dstTxHash = packetResult.value.dst_tx_hash;
   console.log('[createIntent] relay executed, dstTxHash:', dstTxHash);
 
-  // Step 4: Submit to solver API so it can process and fill the swap
   const executionResult = await sodax.swaps.postExecution({
     intent_tx_hash: dstTxHash as `0x${string}`,
   });
@@ -257,95 +213,72 @@ async function createIntent(amount: number, inputToken: string, outputToken: str
   console.log('[createIntent] solver response:', executionResult.value);
 }
 
-async function swap(amount: number, inputToken: string, outputToken: string) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-
-  const userWallet = await getUserWallet();
+async function swap(amount: number, inputToken: string, outputToken: string): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const userHubWallet = await getUserHubWallet();
 
   const result = await sodax.swaps.swap({
-    intentParams: {
+    params: {
       inputToken,
       outputToken,
       inputAmount: BigInt(amount),
       minOutputAmount: 0n,
       deadline: 0n,
       allowPartialFill: false,
-      srcChain: aleoSpokeProvider.chainConfig.chain.id,
-      dstChain: destinationChainConfig.chain.id,
+      srcChainKey: ALEO_CHAIN_KEY,
+      dstChainKey: destinationChainConfig.chain.key,
       srcAddress: walletAddress,
-      dstAddress: userWallet,
+      dstAddress: userHubWallet,
       solver: '0x0000000000000000000000000000000000000000',
       data: '0x',
     },
-    spokeProvider: aleoSpokeProvider,
+    walletProvider: aleoWalletProvider,
+    skipSimulation: true
   });
 
   if (!result.ok) {
     console.error('[swap] Failed:', result.error);
-    throw new Error(`swap failed: ${result.error.code}`);
+    throw new Error('swap failed');
   }
 
-  const [executionResponse, intent, deliveryInfo] = result.value;
+  const { solverExecutionResponse, intent, intentDeliveryInfo } = result.value;
   console.log('[swap] intentId:', intent.intentId);
-  console.log('[swap] srcTxHash:', deliveryInfo.srcTxHash);
-  console.log('[swap] dstTxHash:', deliveryInfo.dstTxHash);
-  console.log('[swap] executionResponse:', executionResponse);
+  console.log('[swap] srcTxHash:', intentDeliveryInfo.srcTxHash);
+  console.log('[swap] dstTxHash:', intentDeliveryInfo.dstTxHash);
+  console.log('[swap] solverExecutionResponse:', solverExecutionResponse);
 }
 
-async function getBalance(token: string) {
-  const balance = await AleoSpokeService.getDeposit(token, aleoSpokeProvider);
+async function getBalance(token: string): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const balance = await aleoSpokeService.getDeposit({
+    srcChainKey: ALEO_CHAIN_KEY,
+    srcAddress: walletAddress,
+    token,
+  });
   console.log('[getBalance] token:', token);
   console.log('[getBalance] balance:', balance.toString());
 }
 
-async function getSimulateDepositParams(token: string, amount: bigint) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-  const params = await AleoSpokeService.getSimulateDepositParams(
-    {
-      from: walletAddress,
-      token,
-      amount,
-      data: '0x',
-    },
-    aleoSpokeProvider,
-    hubProvider,
-  );
-  console.log('[getSimulateDepositParams] spokeChainID:', params.spokeChainID);
-  console.log('[getSimulateDepositParams] token (hex):', params.token);
-  console.log('[getSimulateDepositParams] from:', params.from);
-  console.log('[getSimulateDepositParams] to:', params.to);
-  console.log('[getSimulateDepositParams] amount:', params.amount.toString());
-  console.log('[getSimulateDepositParams] data (keccak256):', params.data);
-  console.log('[getSimulateDepositParams] srcAddress:', params.srcAddress);
+async function estimateGas(token: string, amount: bigint): Promise<void> {
+  const walletAddress = await aleoWalletProvider.getWalletAddress();
+  const userHubWallet = await getUserHubWallet();
 
-  // Basic sanity checks
-  if (params.token === '0x') throw new Error('token field is empty — encoding failed');
-  if (params.from === '0x') throw new Error('from field is empty — encoding failed');
-  if (params.to === '0x') throw new Error('to field is empty — hub wallet lookup failed');
-  if (params.srcAddress === '0x') throw new Error('srcAddress is empty — encoding failed');
-  console.log('[getSimulateDepositParams] ✓ all fields populated');
-}
+  const rawTx = await aleoSpokeService.deposit<true>({
+    srcChainKey: ALEO_CHAIN_KEY,
+    srcAddress: walletAddress,
+    to: userHubWallet,
+    token,
+    amount,
+    data: '0x',
+    raw: true,
+  }, hubProvider);
 
-async function estimateGas(token: string, amount: bigint) {
-  const walletAddress = await aleoSpokeProvider.walletProvider.getWalletAddress();
-  const rawTx = await AleoSpokeService.deposit(
-    {
-      from: walletAddress,
-      token,
-      amount,
-      data: '0x',
-    },
-    aleoSpokeProvider,
-    hubProvider,
-    true,
-  );
-
-  const gasEstimate = await AleoSpokeService.estimateGas(rawTx, aleoSpokeProvider);
+  const gasEstimate = await aleoSpokeService.estimateGas({ tx: rawTx, chainKey: ALEO_CHAIN_KEY });
   console.log('[estimateGas] tx:', rawTx);
   console.log('[estimateGas] gasEstimate:', gasEstimate);
 }
 
-async function main() {
+async function main(): Promise<void> {
   const functionName = process.argv[2];
 
   if (functionName === 'deposit') {
@@ -356,7 +289,7 @@ async function main() {
   } else if (functionName === 'withdrawAsset') {
     const token = process.argv[3];
     const amount = Number(process.argv[4]);
-    const recipient = process.argv[5] as Hex;
+    const recipient = process.argv[5];
     await withdrawAsset(token, amount, recipient);
   } else if (functionName === 'createIntent') {
     const amount = Number(process.argv[3]);
@@ -371,35 +304,28 @@ async function main() {
   } else if (functionName === 'getBalance') {
     const token = process.argv[3];
     await getBalance(token);
-  } else if (functionName === 'getSimulateDepositParams') {
-    const token = process.argv[3];
-    const amount = BigInt(process.argv[4]);
-    await getSimulateDepositParams(token, amount);
   } else if (functionName === 'estimateGas') {
     const token = process.argv[3];
     const amount = BigInt(process.argv[4]);
     await estimateGas(token, amount);
   } else {
     console.log(
-      'Usage: pnpm aleo <function> [args...]\n' +
-        'Functions:\n' +
-        '  deposit <token> <amount> <recipient> [native]  - Deposit tokens to hub\n' +
-        '  withdrawAsset <token> <amount> <recipient>      - Withdraw tokens from hub\n' +
-        '  supply <token> <amount>                          - Supply to lending pool\n' +
-        '  borrow <token> <amount>                          - Borrow from lending pool\n' +
-        '  withdraw <token> <amount>                        - Withdraw from lending pool\n' +
-        '  repay <token> <amount>                           - Repay lending pool debt\n' +
-        '  createIntent <amount> <inputToken> <outputToken>           - Create swap intent (step 1 only)\n' +
-        '  swap <amount> <inputToken> <outputToken>        - Full swap (intent + relay + execute)\n' +
-        '  getBalance <token>                               - Get deposited balance for a token\n' +
-        '  getSimulateDepositParams <token> <amount>        - Get simulation params and verify encoding\n',
-      '  estimateGas <token> <amount>                     - Estimate Aleo gas for a deposit\n',
+      [
+        'Usage: pnpm aleo <function> [args...]',
+        'Functions:',
+        '  deposit <token> <amount> <recipient>             - Deposit tokens to hub',
+        '  withdrawAsset <token> <amount> <recipient>       - Withdraw tokens from hub',
+        '  createIntent <amount> <inputToken> <outputToken> - Create swap intent (manual relay)',
+        '  swap <amount> <inputToken> <outputToken>         - Full swap (intent + relay + execute)',
+        '  getBalance <token>                               - Get deposited balance for a token',
+        '  estimateGas <token> <amount>                     - Estimate Aleo gas for a deposit',
+      ].join('\n'),
     );
   }
 }
 
-main().catch(error => {
+main().catch((error: unknown) => {
   console.error('Error: ', error);
-  console.error('Error:', error.message);
+  if (error instanceof Error) console.error('Error:', error.message);
   process.exit(1);
 });

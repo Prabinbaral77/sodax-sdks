@@ -2,14 +2,12 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import BigNumber from 'bignumber.js';
 import {
-  hubAssets,
-  moneyMarketSupportedTokens,
+  type Sodax,
   SolverIntentStatusCode,
   supportedSpokeChains,
   spokeChainConfig,
   type XToken,
-  type SpokeChainId,
-  type ChainId,
+  type SpokeChainKey,
 } from '@sodax/sdk';
 import { getChainUI } from './chains';
 
@@ -40,6 +38,20 @@ export function formatTokenAmount(amount: number | string | bigint, decimals: nu
   return new BigNumber(amount.toString())
     .dividedBy(new BigNumber(10).pow(decimals))
     .toFixed(displayDecimals, BigNumber.ROUND_DOWN);
+}
+
+/**
+ * Truncates a number to at most `decimals` fractional digits **without rounding**.
+ * Use this instead of `Number.toFixed()` for values that feed into calculations or form inputs,
+ * where rounding up could cause "exceeds max" errors.
+ */
+export function truncateToDecimals(value: number, decimals: number): string {
+  if (!Number.isFinite(value)) return '0';
+  if (decimals === 0) return String(Math.trunc(value));
+  const scaleFactor = 10 ** decimals;
+  const truncatedValue = Math.trunc(value * scaleFactor) / scaleFactor;
+  const fixedString = truncatedValue.toFixed(decimals);
+  return fixedString.replace(/\.?0+$/, '') || '0';
 }
 
 /**
@@ -184,26 +196,12 @@ export function formatCompactNumber(value: string | number | bigint): string {
   return num.toFixed(4);
 }
 
-export function getSpokeTokenAddressByVault(chainId: SpokeChainId, vaultAddress: string): string | undefined {
-  const chainAssets = hubAssets[chainId];
-  if (!chainAssets) return undefined;
-
-  // The KEY in hubAssets is the spoke token address!
-  for (const [spokeTokenAddress, info] of Object.entries(chainAssets)) {
-    if (info.vault.toLowerCase() === vaultAddress.toLowerCase()) {
-      return spokeTokenAddress;
-    }
-  }
-  return undefined;
-}
-
 export function getReadableTxError(error: unknown): string {
   if (!error || typeof error !== 'object') {
     return 'Something went wrong. Please try again.';
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-  const message = (error as any)?.shortMessage || (error as any)?.message || '';
+  const message = (error as Record<string, string>)?.shortMessage || (error as Record<string, string>)?.message || '';
 
   if (message.includes('gas price below minimum')) {
     return 'Network gas fee is too low. Please try again in a moment.';
@@ -216,11 +214,25 @@ export function getReadableTxError(error: unknown): string {
   return 'Transaction failed. Please try again.';
 }
 
-export function createDexTokenIdsStorageKey(chainId: SpokeChainId, userAddress: string): string {
+/**
+ * Human-readable text from mutation failures (`mutateAsyncSafe` `result.error` or thrown values).
+ * Appends `Error.cause` when present so SDK-wrapped errors stay debuggable.
+ */
+export function formatMutationFailureMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) {
+    const cause = (error as { cause?: unknown }).cause;
+    const causeText = cause instanceof Error ? ` — ${cause.message}` : '';
+    return `${error.message}${causeText}`;
+  }
+  return fallback;
+}
+
+export function createDexTokenIdsStorageKey(chainId: SpokeChainKey, userAddress: string): string {
   return `sodax-dex-positions-${chainId}-${userAddress}`;
 }
 
-export function saveTokenIdToLocalStorage(userAddress: string, chainId: SpokeChainId, tokenId: string): void {
+export function saveTokenIdToLocalStorage(userAddress: string, chainId: SpokeChainKey, tokenId: string): void {
   const cleanId = tokenId.trim().toLowerCase();
   const positions = getTokenIdsFromLocalStorage(chainId, userAddress);
 
@@ -228,16 +240,13 @@ export function saveTokenIdToLocalStorage(userAddress: string, chainId: SpokeCha
 
   if (!hasDuplicate) {
     positions.push(tokenId.trim());
-    localStorage.setItem(
-      createDexTokenIdsStorageKey(chainId, userAddress),
-      positions.join(',')
-    );
+    localStorage.setItem(createDexTokenIdsStorageKey(chainId, userAddress), positions.join(','));
   } else {
     console.warn(`Token ID ${tokenId} already exists for user ${userAddress}`);
   }
 }
 
-export function getTokenIdsFromLocalStorage(chainId: SpokeChainId, userAddress: string): string[] {
+export function getTokenIdsFromLocalStorage(chainId: SpokeChainKey, userAddress: string): string[] {
   const positions = localStorage.getItem(createDexTokenIdsStorageKey(chainId, userAddress));
   if (!positions) {
     return [];
@@ -245,14 +254,14 @@ export function getTokenIdsFromLocalStorage(chainId: SpokeChainId, userAddress: 
   return positions.split(',').map(v => v.trim());
 }
 
-export function removeTokenIdFromLocalStorage(chainId: SpokeChainId, userAddress: string, tokenId: string): void {
+export function removeTokenIdFromLocalStorage(chainId: SpokeChainKey, userAddress: string, tokenId: string): void {
   const positions = getTokenIdsFromLocalStorage(chainId, userAddress);
   if (!positions) {
     return;
   }
   if (positions.includes(tokenId)) {
     positions.splice(positions.indexOf(tokenId), 1);
-    localStorage.setItem(`sodax-dex-positions-${userAddress}`, positions.join(','));
+    localStorage.setItem(createDexTokenIdsStorageKey(chainId, userAddress), positions.join(','));
   } else {
     console.warn(`Token ID ${tokenId} not found for user ${userAddress}`);
   }
@@ -272,18 +281,14 @@ export function getHealthFactorState(hf: number) {
   return { label: 'Low Risk', className: 'text-cherry-soda' };
 }
 
-export function getChainsWithThisToken(token: XToken) {
+export function getChainsWithThisToken(sodax: Sodax, token: XToken) {
   return supportedSpokeChains.filter(chainId =>
-    moneyMarketSupportedTokens[chainId].some(t => t.symbol === token.symbol),
+    sodax.moneyMarket.getSupportedTokensByChainId(chainId).some(t => t.symbol === token.symbol),
   );
 }
 
-export function getTokenOnChain(symbol: string, chainId: ChainId): XToken | undefined {
-  const normalizedChainId = String(chainId).toLowerCase();
-
-  return Object.values(moneyMarketSupportedTokens)
-    .flat()
-    .find(t => t.symbol === symbol && t.xChainId === normalizedChainId);
+export function getTokenOnChain(sodax: Sodax, symbol: string, chainId: SpokeChainKey): XToken | undefined {
+  return sodax.moneyMarket.getSupportedTokensByChainId(chainId).find(t => t.symbol === symbol);
 }
 
 export const getChainExplorerTxUrl = (chainId: string, txHash: string): string | undefined => {
@@ -315,43 +320,185 @@ export function isTxHash(value: unknown): value is `0x${string}` {
   return typeof value === 'string' && value.startsWith('0x');
 }
 
-/** Returns the full error message/code for display in MM modals (exact error text). */
-export function getMmErrorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  if (error && typeof error === 'object') {
-    const o = error as { message?: string; code?: string; data?: { payload?: string; error?: unknown } };
+/** Max length of appended RPC/revert text inside MM error alerts (keeps UI readable). */
+const MM_ERROR_RAW_DETAIL_MAX_LEN = 900;
 
-    // Handle relay timeout errors with a user-friendly message
-    if (o.code === 'RELAY_TIMEOUT') {
-      const txHash = o.data?.payload;
+/**
+ * Extracts a human-readable message from the nested `data.error` field of a MoneyMarketError.
+ * Handles viem error objects, plain Error instances, and strings.
+ */
+function extractInnerErrorMessage(dataError: unknown): string | undefined {
+  if (!dataError) return undefined;
+  if (typeof dataError === 'string') return dataError;
+  if (dataError instanceof Error) return (dataError as { shortMessage?: string }).shortMessage ?? dataError.message;
+  if (typeof dataError === 'object') {
+    const e = dataError as { shortMessage?: string; message?: string; details?: string };
+    return e.shortMessage ?? e.message ?? e.details;
+  }
+  return undefined;
+}
+
+/**
+ * Walks `Error.cause`, viem-style `details`, and `{ success, error }` shapes so simulation errors
+ * are not lost when the outer message is only "Simulation failed".
+ */
+function collectNestedErrorText(dataError: unknown, maxDepth = 6): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const collectErrorMessages = (node: unknown, depth: number): void => {
+    if (depth > maxDepth || node == null) return;
+    if (typeof node === 'string') {
+      const trimmed = node.trim();
+      if (trimmed.length > 0) parts.push(trimmed);
+      return;
+    }
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    if (node instanceof Error) {
+      const trimmed = node.message.trim();
+      if (trimmed.length > 0) parts.push(trimmed);
+      collectErrorMessages(node.cause, depth + 1);
+      return;
+    }
+
+    if (typeof node === 'object') {
+      const errorObj = node as Record<string, unknown>;
+      if (typeof errorObj.error === 'string' && errorObj.error.trim().length > 0) parts.push(errorObj.error.trim());
+      if (errorObj.error != null && typeof errorObj.error !== 'string') collectErrorMessages(errorObj.error, depth + 1);
+      if (typeof errorObj.details === 'string' && errorObj.details.trim().length > 0) parts.push(errorObj.details.trim());
+      if (typeof errorObj.message === 'string' && errorObj.message.trim().length > 0) parts.push(errorObj.message.trim());
+      if (typeof errorObj.shortMessage === 'string' && errorObj.shortMessage.trim().length > 0) parts.push(errorObj.shortMessage.trim());
+      if ('cause' in errorObj) collectErrorMessages(errorObj.cause, depth + 1);
+    }
+  };
+
+  collectErrorMessages(dataError, 0);
+  return [...new Set(parts)].join('\n');
+}
+
+/** Full searchable text from `data.error` for substring checks and optional display. */
+function getMmDataErrorSearchableText(dataError: unknown): string {
+  const nested = collectNestedErrorText(dataError);
+  if (nested.length > 0) return nested;
+  return extractInnerErrorMessage(dataError) ?? '';
+}
+
+/** Checks whether the inner error message matches any of the given substrings (case-insensitive). */
+function innerErrorIncludes(msg: string | undefined, ...needles: string[]): boolean {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return needles.some(n => lower.includes(n.toLowerCase()));
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatHubSimulationFailureMessage(action: string, errorCode: string, dataError: unknown): string {
+  const raw = getMmDataErrorSearchableText(dataError);
+  const rawTrunc = raw.length > MM_ERROR_RAW_DETAIL_MAX_LEN ? `${raw.slice(0, MM_ERROR_RAW_DETAIL_MAX_LEN)}…` : raw;
+
+  const lines = [
+    `${capitalize(action)} simulation failed on hub chain (Sonic).`,
+    '',
+    'Possible causes:',
+    '• Health factor: withdrawing collateral with active borrows.',
+    '• Insufficient pool liquidity (high utilization).',
+    '• Rounding / dust amount issues.',
+    '',
+    'Try a smaller amount or repay debt first.',
+    '',
+    `SDK error code: ${errorCode}`,
+  ];
+
+  if (rawTrunc.length > 0) {
+    lines.push('', 'Detail:', rawTrunc);
+  }
+
+  return lines.join('\n');
+}
+
+export function getMmErrorText(error: unknown): string {
+  if (typeof error === 'string') return error;
+
+  // Normalize both shapes into { code, data: { error } } so the branch logic below works for v1 and v2.
+  // v2 (post-refactor): plain Error with CODE on .message and underlying on .cause.
+  // v1 (legacy MoneyMarketError): object with { code, data: { payload, error } }.
+  let sdkError: { message?: string; code?: string; data?: { payload?: unknown; error?: unknown } } | null = null;
+  if (error instanceof Error) {
+    sdkError = { message: error.message, code: error.message, data: { error: (error as { cause?: unknown }).cause } };
+  } else if (error && typeof error === 'object') {
+    sdkError = error as { message?: string; code?: string; data?: { payload?: unknown; error?: unknown } };
+  }
+
+  if (sdkError) {
+    const searchableText = getMmDataErrorSearchableText(sdkError.data?.error);
+    const innerMsg = extractInnerErrorMessage(sdkError.data?.error);
+
+    // ── Relay errors ──
+    if (sdkError.code === 'RELAY_TIMEOUT') {
+      const txHash = sdkError.data?.payload;
       if (txHash && typeof txHash === 'string') {
         return `Transaction timed out while waiting for relay. The transaction may still be processing.\n\nTransaction hash: ${txHash}\n\nPlease check the transaction status on the explorer.`;
       }
       return 'Transaction timed out while waiting for relay. The transaction may still be processing. Please check the transaction status on the explorer.';
     }
 
-    // Handle submit tx failed errors
-    if (o.code === 'SUBMIT_TX_FAILED') {
+    if (sdkError.code === 'SUBMIT_TX_FAILED') {
       return 'Failed to submit transaction to relay. Please try again.';
     }
 
-    // Repay/create intent failed (e.g. deposit simulation reverted on hub with "External call failed")
-    if (o.code === 'CREATE_REPAY_INTENT_FAILED') {
-      const detail = o.data?.error;
-      const msg = typeof detail === 'string' ? detail : '';
-      if (msg.includes('External call failed') || msg.includes('Simulation failed')) {
-        return 'Repay simulation failed on the hub. The transfer may not be allowed in current state (e.g. contract conditions). Please try again or use a smaller amount.';
+    // ── Intent creation failures (simulation reverts) ──
+    if (
+      sdkError.code === 'CREATE_WITHDRAW_INTENT_FAILED' ||
+      sdkError.code === 'CREATE_SUPPLY_INTENT_FAILED' ||
+      sdkError.code === 'CREATE_BORROW_INTENT_FAILED' ||
+      sdkError.code === 'CREATE_REPAY_INTENT_FAILED'
+    ) {
+      const action = sdkError.code.replace('CREATE_', '').replace('_INTENT_FAILED', '').toLowerCase();
+
+      if (innerErrorIncludes(searchableText, 'insufficient funds for gas', 'exceeds the balance of the account')) {
+        return `Not enough native token to cover gas fees for the ${action} transaction. Please top up your wallet.`;
       }
-      return msg || 'Repay intent could not be created. Please try again.';
+      if (innerErrorIncludes(searchableText, 'External call failed', 'Simulation failed', 'Execution reverted')) {
+        return formatHubSimulationFailureMessage(action, sdkError.code, sdkError.data?.error);
+      }
+      if (innerErrorIncludes(searchableText, 'user rejected', 'User denied', 'user cancelled')) {
+        return 'Transaction was rejected in your wallet.';
+      }
+      return (
+        searchableText ||
+        innerMsg ||
+        `${capitalize(action)} transaction could not be created. (SDK code: ${sdkError.code})`
+      );
     }
 
-    // Generic repay failure (e.g. unexpected throw)
-    if (o.code === 'REPAY_UNKNOWN_ERROR') {
-      return 'Repay failed. Please try again. If the problem persists, check your balance and allowance.';
+    // ── Unknown / catch-all errors per action ──
+    if (
+      sdkError.code === 'WITHDRAW_UNKNOWN_ERROR' ||
+      sdkError.code === 'SUPPLY_UNKNOWN_ERROR' ||
+      sdkError.code === 'BORROW_UNKNOWN_ERROR' ||
+      sdkError.code === 'REPAY_UNKNOWN_ERROR'
+    ) {
+      const action = sdkError.code.replace('_UNKNOWN_ERROR', '').toLowerCase();
+
+      if (innerErrorIncludes(searchableText, 'insufficient funds for gas', 'exceeds the balance of the account')) {
+        return `Not enough native token to cover gas fees for the ${action} transaction. Please top up your wallet.`;
+      }
+      if (innerErrorIncludes(searchableText, 'External call failed', 'Simulation failed', 'Execution reverted')) {
+        return formatHubSimulationFailureMessage(action, sdkError.code, sdkError.data?.error);
+      }
+      if (innerErrorIncludes(searchableText, 'user rejected', 'User denied', 'user cancelled')) {
+        return 'Transaction was rejected in your wallet.';
+      }
+      return (
+        searchableText || innerMsg || `${capitalize(action)} failed unexpectedly. (SDK code: ${sdkError.code})`
+      );
     }
 
-    const part = o.message ?? o.code;
+    const part = sdkError.message ?? sdkError.code;
     if (typeof part === 'string') return part;
   }
   return String(error);
@@ -361,8 +508,8 @@ export function getMmErrorText(error: unknown): string {
  * Gets the native token symbol for a given chain ID (e.g., ETH for Arbitrum, AVAX for Avalanche).
  * Used for displaying gas fee requirements to users.
  */
-export function getNativeTokenSymbol(chainId: ChainId): string {
-  const config = spokeChainConfig[chainId as SpokeChainId];
+export function getNativeTokenSymbol(chainId: SpokeChainKey): string {
+  const config = spokeChainConfig[chainId as SpokeChainKey];
   if (!config) return 'native token';
 
   // Find the token with address matching nativeToken (0x0000... for EVM chains)

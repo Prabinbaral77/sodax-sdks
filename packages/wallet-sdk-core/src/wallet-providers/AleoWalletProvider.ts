@@ -91,6 +91,7 @@ type InitializedState = {
 };
 
 export class AleoWalletProvider implements IAleoWalletProvider {
+  public readonly chainType = 'ALEO' as const;
   private readonly config: AleoWalletConfig;
   private initPromise: Promise<InitializedState> | null = null;
   private state: InitializedState | null = null;

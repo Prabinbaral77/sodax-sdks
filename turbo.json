@@ -29,6 +29,10 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "test:packages": {
+      "dependsOn": ["^build"],
+      "inputs": ["packages/**"]
+    },
     "clean": {
       "cache": false
     },
@@ -36,12 +40,28 @@
       "dependsOn": ["^lint"],
       "cache": false
     },
+    "lint:packages": {
+      "dependsOn": ["^lint"],
+      "inputs": ["packages/**"],
+      "cache": false
+    },
     "checkTs": {
       "dependsOn": ["^checkTs"]
+    },
+    "checkTs:packages": {
+      "dependsOn": ["^checkTs"],
+      "inputs": ["packages/**"]
     },
     "pretty": {
       "dependsOn": ["^pretty"],
       "cache": false
+    },
+    "check:circular-deps": {
+      "cache": false
+    },
+    "check:circular-deps:packages": {
+      "dependsOn": ["^check:circular-deps"],
+      "inputs": ["packages/**"]
     }
   },
   "remoteCache": {

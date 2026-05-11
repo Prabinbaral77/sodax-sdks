@@ -2,14 +2,15 @@ import React from 'react';
 import './App.css';
 
 import { createBrowserRouter, Outlet, RouterProvider, Navigate } from 'react-router';
-import MoneyMarketPage from './pages/money-market/page';
+import { ChainKeys } from '@sodax/sdk';
 import Header from './components/shared/header';
 import SolverPage from './pages/solver/page';
+import MoneyMarketPage from './pages/money-market/page';
 import BridgePage from './pages/bridge/page';
+import DexPage from './pages/dex/page';
 import StakingPage from './pages/staking/page';
 import PartnerFeeClaimPage from './pages/partner-fee-claim/page';
-import DexPage from './pages/dex/page';
-
+import RecoveryPage from './pages/recovery/page';
 
 const router = createBrowserRouter([
   {
@@ -23,19 +24,27 @@ const router = createBrowserRouter([
     children: [
       {
         path: '/',
-        element: <Navigate to="/money-market" />,
-      },
-      {
-        path: '/money-market/:chainId?',
-        element: <MoneyMarketPage />,
+        element: <Navigate to="/solver" />,
       },
       {
         path: '/solver',
         element: <SolverPage />,
       },
       {
+        path: '/money-market',
+        element: <Navigate to={`/money-market/${ChainKeys.ARBITRUM_MAINNET}`} replace />,
+      },
+      {
+        path: '/money-market/:chainId',
+        element: <MoneyMarketPage />,
+      },
+      {
         path: '/bridge',
         element: <BridgePage />,
+      },
+      {
+        path: '/dex',
+        element: <DexPage />,
       },
       {
         path: '/staking',
@@ -46,8 +55,8 @@ const router = createBrowserRouter([
         element: <PartnerFeeClaimPage />,
       },
       {
-        path: '/dex',
-        element: <DexPage />,
+        path: '/recovery',
+        element: <RecoveryPage />,
       },
     ],
   },

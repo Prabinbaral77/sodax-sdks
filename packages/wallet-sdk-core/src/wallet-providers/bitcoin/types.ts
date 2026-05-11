@@ -1,0 +1,52 @@
+import type { BtcAddressType, Hex } from '@sodax/types';
+import type { ECPairInterface } from 'ecpair';
+
+export type BitcoinNetwork = 'TESTNET' | 'MAINNET';
+
+export interface BitcoinWalletsKit {
+  getAccounts(): Promise<string[]>;
+  signPsbt(psbtHex: string): Promise<{ psbtHex: string }>;
+  signMessage(message: string): Promise<string>;
+  signEcdsaMessage(message: string): Promise<string>;
+  signBip322Message(message: string): Promise<string>;
+  getPublicKey(): Promise<string>;
+  sendBitcoin?(toAddress: string, satoshis: number): Promise<string>;
+}
+
+/** Defaults applied to every call. Per-call options shallow-merge over these. */
+export type BitcoinWalletDefaults = {
+  /** Default `finalize` flag for `signTransaction`. Default `true`. */
+  defaultFinalize?: boolean;
+};
+
+/** Configuration for constructing a `BitcoinWalletProvider` backed by a raw private key. */
+export type PrivateKeyBitcoinWalletConfig = {
+  type: 'PRIVATE_KEY';
+  privateKey: Hex;
+  network: BitcoinNetwork;
+  addressType?: BtcAddressType;
+  defaults?: BitcoinWalletDefaults;
+};
+
+/** Configuration for constructing a `BitcoinWalletProvider` backed by a browser-extension wallet. */
+export type BrowserExtensionBitcoinWalletConfig = {
+  type: 'BROWSER_EXTENSION';
+  walletsKit: BitcoinWalletsKit;
+  network: BitcoinNetwork;
+  defaults?: BitcoinWalletDefaults;
+};
+
+export type BitcoinWalletConfig = PrivateKeyBitcoinWalletConfig | BrowserExtensionBitcoinWalletConfig;
+
+export type BitcoinPkWallet = {
+  type: 'PRIVATE_KEY';
+  keyPair: ECPairInterface;
+  addressType: BtcAddressType;
+};
+
+export type BitcoinBrowserWallet = {
+  type: 'BROWSER_EXTENSION';
+  walletsKit: BitcoinWalletsKit;
+};
+
+export type BitcoinWallet = BitcoinPkWallet | BitcoinBrowserWallet;

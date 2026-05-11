@@ -1,13 +1,14 @@
 // apps/demo/src/components/dex/ManageLiquidity.tsx
-import React, { type JSX, useEffect, useState } from 'react';
+import React, { type JSX, useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertCircle, Loader2 } from 'lucide-react';
-import type { ChainId, ClPositionInfo, PoolData, PoolKey, SpokeProvider } from '@sodax/sdk';
-import { useXBalances, type XAccount } from '@sodax/wallet-sdk-react';
+import type { ClPositionInfo, PoolData, PoolKey } from '@sodax/sdk';
+import { baseChainInfo, type SpokeChainKey } from '@sodax/sdk';
+import { type IWalletProvider, type XAccount, getXChainType, useXService } from '@sodax/wallet-sdk-react';
 import { UserPositions } from '@/components/dex/UserPositions';
 import {
   createWithdrawParamsProps,
@@ -17,13 +18,14 @@ import {
   useDexDeposit,
   useDexWithdraw,
   useSodaxContext,
+  useXBalances,
 } from '@sodax/dapp-kit';
 import { NavLink } from 'react-router';
 
 interface ManageLiquidityProps {
   poolData: PoolData;
   xAccount: XAccount;
-  spokeProvider: SpokeProvider;
+  walletProvider: IWalletProvider;
   pools: PoolKey[];
   selectedPoolIndex: number;
   // Form state
@@ -38,7 +40,7 @@ interface ManageLiquidityProps {
   positionInfo: ClPositionInfo | null;
   isValidPosition: boolean;
   selectedPoolKey: PoolKey;
-  selectedChainId: ChainId;
+  selectedChainId: SpokeChainKey;
   // Handlers
   onLiquidityToken0AmountChange: (value: string) => void;
   onLiquidityToken1AmountChange: (value: string) => void;
@@ -57,7 +59,7 @@ interface ManageLiquidityProps {
 export function ManageLiquidity({
   poolData,
   xAccount,
-  spokeProvider,
+  walletProvider,
   pools,
   selectedPoolIndex,
   token0Balance,
@@ -84,24 +86,28 @@ export function ManageLiquidity({
   selectedChainId,
 }: ManageLiquidityProps): JSX.Element | null {
   const { sodax } = useSodaxContext();
+  const srcAddress = xAccount.address as `0x${string}`;
 
-  // UI state
   const [error, setError] = useState<string>('');
-
-  // Form state
   const [token0Amount, setToken0Amount] = useState<string>('');
   const [token1Amount, setToken1Amount] = useState<string>('');
 
-  const poolSpokeAssets = sodax.dex.clService.getAssetsForPool(spokeProvider, pools[selectedPoolIndex]);
+  const poolSpokeAssets = useMemo(
+    () => sodax.dex.clService.getAssetsForPool(selectedChainId, pools[selectedPoolIndex]),
+    [sodax, selectedChainId, pools, selectedPoolIndex],
+  );
+  const xService = useXService({ xChainType: getXChainType(selectedChainId) });
   const { data: sourceBalances } = useXBalances({
-    xChainId: selectedChainId,
-    xTokens: [poolSpokeAssets.token0, poolSpokeAssets.token1],
-    address: xAccount.address,
+    params: {
+      xService,
+      xChainId: selectedChainId,
+      xTokens: [poolSpokeAssets.token0, poolSpokeAssets.token1],
+      address: xAccount.address,
+    },
   });
   const spokeToken0Balance = sourceBalances?.[poolSpokeAssets.token0.address ?? ''] ?? 0n;
   const spokeToken1Balance = sourceBalances?.[poolSpokeAssets.token1.address ?? ''] ?? 0n;
 
-  // Reset state when chain changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: setter functions are stable
   useEffect(() => {
     setToken0Amount('');
@@ -120,76 +126,54 @@ export function ManageLiquidity({
     poolData,
     poolSpokeAssets,
   });
+
+  const allowanceParams0 = createDepositParams0
+    ? { ...createDepositParams0, srcChainKey: selectedChainId, srcAddress }
+    : undefined;
+  const allowanceParams1 = createDepositParams1
+    ? { ...createDepositParams1, srcChainKey: selectedChainId, srcAddress }
+    : undefined;
+
   const { data: hasToken0Allowed, isLoading: isToken0AllowanceLoading } = useDexAllowance({
-    params: createDepositParams0,
-    spokeProvider,
+    params: { payload: allowanceParams0 },
   });
   const { data: hasToken1Allowed, isLoading: isToken1AllowanceLoading } = useDexAllowance({
-    params: createDepositParams1,
-    spokeProvider,
+    params: { payload: allowanceParams1 },
   });
   const { mutateAsync: approveToken0, isPending: isApprovingToken0 } = useDexApprove();
   const { mutateAsync: approveToken1, isPending: isApprovingToken1 } = useDexApprove();
 
-  // Hooks for mutations
   const depositMutation = useDexDeposit();
   const withdrawMutation = useDexWithdraw();
 
-  // Handle mutation errors and success
-  useEffect(() => {
-    if (depositMutation.isSuccess) {
-      setError('');
-    } else if (depositMutation.error) {
-      setError(`Deposit failed: ${depositMutation.error.message}`);
-    }
-  }, [depositMutation.isSuccess, depositMutation.error]);
-
-  useEffect(() => {
-    if (withdrawMutation.isSuccess) {
-      setError('');
-    } else if (withdrawMutation.error) {
-      setError(`Withdraw failed: ${withdrawMutation.error.message}`);
-    }
-  }, [withdrawMutation.isSuccess, withdrawMutation.error]);
-
-  // Combined loading state
   const loading = depositMutation.isPending || withdrawMutation.isPending;
 
-  const handleApproveToken0 = async () => {
-    if (!createDepositParams0) {
-      setError('Please enter a valid amount ');
-      return;
-    }
-
-    if (!spokeProvider) {
-      setError('Spoke provider is not set');
-      return;
-    }
-
-    await approveToken0({ params: createDepositParams0, spokeProvider });
-  };
-  const handleApproveToken1 = async () => {
-    if (!createDepositParams1) {
+  const handleApprove = async (tokenIndex: 0 | 1): Promise<void> => {
+    const coreParams = tokenIndex === 0 ? createDepositParams0 : createDepositParams1;
+    const approve = tokenIndex === 0 ? approveToken0 : approveToken1;
+    if (!coreParams) {
       setError('Please enter a valid amount');
       return;
     }
-
-    if (!spokeProvider) {
-      setError('Spoke provider is not set');
-      return;
+    try {
+      await approve({
+        params: { ...coreParams, srcChainKey: selectedChainId, srcAddress },
+        walletProvider,
+      });
+    } catch (err) {
+      setError(`Approve failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
-    await approveToken1({ params: createDepositParams1, spokeProvider });
   };
 
   // Handle deposit
   const handleDeposit = async (tokenIndex: 0 | 1): Promise<void> => {
-    if (!poolData || !spokeProvider || !selectedPoolKey) {
+    if (!poolData || !selectedPoolKey) {
       setError('Please ensure wallet is connected and services are initialized');
       return;
     }
 
-    const params = tokenIndex === 0 ? createDepositParams0 : createDepositParams1;
-    if (!params) {
+    const coreParams = tokenIndex === 0 ? createDepositParams0 : createDepositParams1;
+    if (!coreParams) {
       setError('Please enter a valid amount');
       return;
     }
@@ -197,7 +181,10 @@ export function ManageLiquidity({
     setError('');
 
     try {
-      await depositMutation.mutateAsync({ params, spokeProvider });
+      await depositMutation.mutateAsync({
+        params: { ...coreParams, srcChainKey: selectedChainId, srcAddress },
+        walletProvider,
+      });
 
       // Clear form
       if (tokenIndex === 0) {
@@ -214,7 +201,7 @@ export function ManageLiquidity({
 
   // Handle withdraw
   const handleWithdraw = async (tokenIndex: 0 | 1): Promise<void> => {
-    if (!poolData || !spokeProvider || !selectedPoolKey) {
+    if (!poolData || !selectedPoolKey) {
       setError('Please ensure wallet is connected and services are initialized');
       return;
     }
@@ -228,14 +215,16 @@ export function ManageLiquidity({
     setError('');
 
     try {
+      const withdrawCore = createWithdrawParamsProps({
+        tokenIndex,
+        amount,
+        poolData,
+        poolSpokeAssets,
+      });
+
       await withdrawMutation.mutateAsync({
-        params: createWithdrawParamsProps({
-          tokenIndex,
-          amount,
-          poolData,
-          poolSpokeAssets,
-        }),
-        spokeProvider,
+        params: { ...withdrawCore, srcChainKey: selectedChainId, srcAddress },
+        walletProvider,
       });
 
       // Clear form
@@ -252,9 +241,11 @@ export function ManageLiquidity({
   };
 
   if (!poolData || !xAccount?.address) {
-    console.warn('[ManageLiquidity] Pool data or xAccount address is required');
     return null;
   }
+
+  const spokeChainName = baseChainInfo[selectedChainId]?.name ?? selectedChainId;
+  const hubChainName = sodax.hubProvider.chainConfig.chain.name;
 
   return (
     <Card>
@@ -301,10 +292,10 @@ export function ManageLiquidity({
                 </div>
                 <div className="text-xs space-y-1">
                   <p className="text-muted-foreground">
-                    Balance ({spokeProvider.chainConfig.chain.name}):{' '}
+                    Balance ({spokeChainName}):{' '}
                     {formatAmount(spokeToken0Balance, poolSpokeAssets.token0.decimals)} {poolSpokeAssets.token0.symbol}
                     <br />
-                    Deposited Balance ({sodax.hubProvider.chainConfig.chain.name}):{' '}
+                    Deposited Balance ({hubChainName}):{' '}
                     {formatAmount(token0Balance, poolData.token0.decimals)} {poolData.token0.symbol}
                   </p>
                   {poolData.token0IsStatAToken &&
@@ -326,7 +317,7 @@ export function ManageLiquidity({
                   className="w-full"
                   type="button"
                   variant="default"
-                  onClick={handleApproveToken0}
+                  onClick={() => handleApprove(0)}
                   disabled={
                     createDepositParams0 === undefined ||
                     isToken0AllowanceLoading ||
@@ -375,10 +366,10 @@ export function ManageLiquidity({
                 </div>
                 <div className="text-xs space-y-1">
                   <p className="text-muted-foreground">
-                    Balance ({spokeProvider.chainConfig.chain.name}):{' '}
+                    Balance ({spokeChainName}):{' '}
                     {formatAmount(spokeToken1Balance, poolSpokeAssets.token1.decimals)} {poolSpokeAssets.token1.symbol}
                     <br />
-                    Deposited Balance ({sodax.hubProvider.chainConfig.chain.name}):{' '}
+                    Deposited Balance ({hubChainName}):{' '}
                     {formatAmount(token1Balance, poolData.token1.decimals)} {poolData.token1.symbol}
                   </p>
                   {poolData.token1IsStatAToken &&
@@ -400,7 +391,7 @@ export function ManageLiquidity({
                   className="w-full"
                   type="button"
                   variant="default"
-                  onClick={handleApproveToken1}
+                  onClick={() => handleApprove(1)}
                   disabled={
                     createDepositParams1 === undefined ||
                     isToken1AllowanceLoading ||
@@ -829,7 +820,8 @@ export function ManageLiquidity({
               userAddress={xAccount.address}
               poolKey={selectedPoolKey}
               poolData={poolData}
-              spokeProvider={spokeProvider}
+              chainKey={selectedChainId}
+              walletProvider={walletProvider}
             />
           </TabsContent>
         </Tabs>

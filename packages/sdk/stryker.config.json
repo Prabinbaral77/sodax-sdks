@@ -1,0 +1,18 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment_what": "Stryker mutation testing config. Stryker injects small bugs ('mutants') into the source one at a time and re-runs the tests; a 'killed' mutant is one that some test caught, a 'survived' mutant is a real gap (covered code that no assertion actually verifies). See https://stryker-mutator.io.",
+  "_comment_scope": "Scoped to one source file at a time — repoint `mutate` + `disableTypeChecks` and update vitest.stryker.config.ts when running for a different service. Narrowing test discovery via the vitest config keeps Stryker from re-running the full suite per mutant.",
+  "_comment_run": "From packages/sdk: ./node_modules/.bin/stryker run — then open reports/mutation/mutation.html for the per-mutant view.",
+  "_comment_ci": "Not wired into CI. One-shot signal that goes beyond branch coverage: high mutation score = tests actually verify behavior, not just touch lines.",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "inPlace": true,
+  "disableTypeChecks": "src/shared/services/spoke/SonicSpokeService.ts",
+  "mutate": [],
+  "reporters": ["clear-text", "html", "progress"],
+  "vitest": {
+    "configFile": "vitest.stryker.config.ts",
+    "related": false
+  },
+  "timeoutMS": 30000
+}

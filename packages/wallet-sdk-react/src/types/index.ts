@@ -1,4 +1,13 @@
-import type { ChainType } from '@sodax/types';
+import type {
+  ChainType,
+  IWalletProvider,
+} from '@sodax/types';
+
+export type { IWalletProvider };
+export * from './interfaces.js';
+export * from './config.js';
+export * from './chainActions.js';
+
 
 export type XAccount = {
   address: string | undefined;
@@ -10,13 +19,3 @@ export type XConnection = {
   xAccount: XAccount;
   xConnectorId: string;
 };
-
-export type CurrencyKey = string;
-
-export enum WalletId {
-  METAMASK = 'metamask',
-  HANA = 'hana',
-  PHANTOM = 'phantom',
-  SUI = 'sui',
-  KEPLR = 'keplr',
-}

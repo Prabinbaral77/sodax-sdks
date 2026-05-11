@@ -1,54 +1,43 @@
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import type { SpokeProvider, SpokeTxHash, HubTxHash, CreateAssetWithdrawParams } from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
-
-export type UseDexWithdrawParams = {
-  params: CreateAssetWithdrawParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/dex/useDexWithdraw.ts
+import type { AssetWithdrawAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * React hook to provide a mutation for withdrawing assets from a DEX pool.
- *
- * This hook returns a mutation result object valid for use with React Query.
- * The mutation function expects an object with the withdrawal parameters and a SpokeProvider,
- * and triggers the withdrawal operation on the DEX. On success, it invalidates the relevant
- * ['dex', 'poolBalances'] query to fetch the updated balances.
- *
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDexWithdrawParams>}
- *   Mutation result object. Use its properties to:
- *   - Call `mutateAsync({ params, spokeProvider })` to perform the withdrawal.
- *   - Track progress with `isPending`.
- *   - Access any `error` encountered during the mutation.
- *
- * @example
- * const { mutateAsync: withdraw, isPending, error } = useDexWithdraw();
- * await withdraw({ params, spokeProvider });
+ * Mutation variables for {@link useDexWithdraw}. Generic over `K extends SpokeChainKey` (defaults
+ * to the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useDexWithdraw(): UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDexWithdrawParams> {
+export type UseDexWithdrawVars<K extends SpokeChainKey = SpokeChainKey> = Omit<AssetWithdrawAction<K, false>, 'raw'>;
+
+/**
+ * React hook for withdrawing an asset from a DEX pool.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useDexWithdraw<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseDexWithdrawVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseDexWithdrawVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ params, spokeProvider }: UseDexWithdrawParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider is required');
-      }
-      // Execute withdraw
-      const withdrawResult = await sodax.dex.assetService.withdraw({
-        params,
-        spokeProvider,
-      });
-
-      if (!withdrawResult.ok) {
-        throw new Error(`Withdraw failed: ${withdrawResult.error.code}`);
-      }
-
-      return withdrawResult.value;
-    },
-    onSuccess: () => {
-      // Invalidate balances query to refetch after withdraw
-      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances'] });
+  return useSafeMutation<TxHashPair, Error, UseDexWithdrawVars<K>>({
+    mutationKey: ['dex', 'withdraw'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.dex.assetService.withdraw({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

@@ -1,266 +1,174 @@
-import type {
-  DestinationParamsType,
-  EvmSpokeProviderType,
-  OptionalRaw,
-  OptionalTimeout,
-  Prettify,
-  RelayOptionalExtraData,
-  SonicSpokeProviderType,
-  SpokeTxHash,
-  StellarSpokeProviderType,
-} from './../shared/types.js';
+import type { DestinationParamsType, IntentTxResult, TxHashPair } from '../shared/types/types.js';
 import type { Address, Hex } from 'viem';
 import {
-  DEFAULT_RELAYER_API_ENDPOINT,
-  type RelayErrorCode,
-  type RelayError,
   EvmAssetManagerService,
-  type Result,
-  type TxReturnType,
-  type SpokeProvider,
-  SpokeService,
+  type SpokeService,
   encodeAddress,
   Erc20Service,
   Erc4626Service,
   EvmVaultTokenService,
   encodeContractCalls,
   relayTxAndWaitPacket,
-  DEFAULT_RELAY_TX_TIMEOUT,
-  type EvmContractCall,
   type ConfigService,
-  StellarSpokeService,
-  isStellarSpokeProviderType,
-  isEvmSpokeProviderType,
-  isSonicSpokeProviderType,
-  HubService,
-  isHubSpokeProvider,
-  isSpokeProviderObjectType,
-  isRawDestinationParams,
   wrappedSonicAbi,
-  isSolanaSpokeProviderType,
-} from '../index.js';
+  type HubProvider,
+  isStellarChainKeyType,
+  type SpokeIsAllowanceValidParamsStellar,
+  isHubChainKeyType,
+  isEvmChainKeyType,
+  isOptionalStellarWalletProviderType,
+  isEvmSpokeOnlyChainKeyType,
+  isOptionalEvmWalletProviderType,
+  type SendMessageParams,
+} from '../shared/index.js';
 import {
   SodaTokens,
   type ConcentratedLiquidityConfig,
+  type EvmChainKey,
+  type EvmContractCall,
+  type EvmSpokeOnlyChainKey,
+  type GetAddressType,
+  type GetTokenAddressType,
+  type GetWalletProviderType,
   type HttpUrl,
+  type HubChainKey,
   type OriginalAssetAddress,
-  type SpokeChainId,
+  type Result,
+  type SpokeChainKey,
+  type SpokeExecActionParams,
+  type StellarChainKey,
+  type TxReturnType,
 } from '@sodax/types';
 import { encodeFunctionData, erc20Abi, isAddress } from 'viem';
 import invariant from 'tiny-invariant';
-import { getConcentratedLiquidityConfig } from '../shared/constants.js';
 import { stataTokenFactoryAbi } from '../shared/abis/stataTokenFactory.abi.js';
-import type { EvmHubProvider, SpokeProviderType } from '../shared/entities/Providers.js';
-import type { GetAddressType, GetSpokeDepositParamsType, HubTxHash } from '../shared/types.js';
 
-// Local type definitions
-export type AssetServiceConfig = {
-  concentratedLiquidityConfig: ConcentratedLiquidityConfig;
-};
-
-type AssetServiceConfigParams = AssetServiceConfig;
-
-export type CreateAssetWithdrawParams = {
+export type CreateAssetWithdrawParams<K extends SpokeChainKey> = {
+  srcChainKey: K;
+  srcAddress: GetAddressType<K>;
   poolToken: Address;
   asset: OriginalAssetAddress; // asset address
   amount: bigint; // amount of asset to withdraw
   dst?: DestinationParamsType;
 };
 
-export type CreateAssetDepositParams = {
+export type CreateAssetDepositParams<K extends SpokeChainKey> = {
+  srcChainKey: K;
+  srcAddress: GetAddressType<K>;
   asset: OriginalAssetAddress; // asset address
   amount: bigint; // amount of token to deposit
   poolToken: Address;
   dst?: DestinationParamsType;
 };
 
-export type AssetWithdrawParams<S extends SpokeProviderType = SpokeProviderType> = {
-  params: CreateAssetWithdrawParams;
-  spokeProvider: S;
-};
+export type AssetWithdrawAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  CreateAssetWithdrawParams<K>
+>;
 
-export type AssetDepositParams<S extends SpokeProviderType = SpokeProviderType> = {
-  params: CreateAssetDepositParams;
-  spokeProvider: S;
-};
-
-export type AssetServiceUnknownErrorCode = 'DEPOSIT_UNKNOWN_ERROR' | 'ALLOWANCE_CHECK_FAILED' | 'APPROVAL_FAILED';
-
-export type GetAssetServiceParams<T extends AssetServiceUnknownErrorCode> = T extends 'DEPOSIT_UNKNOWN_ERROR'
-  ? CreateAssetDepositParams
-  : T extends 'ALLOWANCE_CHECK_FAILED'
-    ? CreateAssetDepositParams
-    : T extends 'APPROVAL_FAILED'
-      ? CreateAssetDepositParams
-      : CreateAssetDepositParams;
-
-export type AssetServiceErrorCode =
-  | AssetServiceUnknownErrorCode
-  | RelayErrorCode
-  | 'CREATE_DEPOSIT_INTENT_FAILED'
-  | 'CREATE_WITHDRAW_LIQUIDITY_INTENT_FAILED';
-
-export type AssetServiceUnknownError<T extends AssetServiceUnknownErrorCode> = {
-  error: unknown;
-  payload: GetAssetServiceParams<T>;
-};
-
-export type AssetServiceSubmitTxFailedError = {
-  error: RelayError;
-  payload: string;
-};
-
-export type AssetServiceDepositFailedError = {
-  error: unknown;
-  payload: CreateAssetDepositParams;
-};
-
-export type AssetServiceWithdrawFailedError = {
-  error: unknown;
-  payload: AssetWithdrawParams;
-};
-
-export type AssetServiceAllowanceCheckFailedError = {
-  error: unknown;
-  payload: CreateAssetDepositParams;
-};
-
-export type AssetServiceApprovalFailedError = {
-  error: unknown;
-  payload: CreateAssetDepositParams;
-};
-
-export type GetAssetServiceError<T extends AssetServiceErrorCode> = T extends 'SUBMIT_TX_FAILED'
-  ? AssetServiceSubmitTxFailedError
-  : T extends 'RELAY_TIMEOUT'
-    ? AssetServiceSubmitTxFailedError
-    : T extends 'CREATE_DEPOSIT_INTENT_FAILED'
-      ? AssetServiceDepositFailedError
-      : T extends 'CREATE_WITHDRAW_LIQUIDITY_INTENT_FAILED'
-        ? AssetServiceWithdrawFailedError
-        : T extends 'ALLOWANCE_CHECK_FAILED'
-          ? AssetServiceAllowanceCheckFailedError
-          : T extends 'APPROVAL_FAILED'
-            ? AssetServiceApprovalFailedError
-            : T extends AssetServiceUnknownErrorCode
-              ? AssetServiceUnknownError<T>
-              : never;
-
-export type AssetServiceError<T extends AssetServiceErrorCode> = {
-  code: T;
-  data: GetAssetServiceError<T>;
-};
+export type AssetDepositAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  CreateAssetDepositParams<K>
+>;
 
 export type AssetServiceConstructorParams = {
-  config?: AssetServiceConfigParams;
-  hubProvider: EvmHubProvider;
-  relayerApiEndpoint?: HttpUrl;
-  configService: ConfigService;
+  hubProvider: HubProvider;
+  spoke: SpokeService;
+  config: ConfigService;
 };
 
+/**
+ * Service for wrapping and unwrapping assets in preparation for DEX liquidity provision.
+ *
+ * The SODAX DEX pools hold StatATokens (ERC-4626 interest-bearing wrappers produced by
+ * the `StataTokenFactory`). Before a user can supply liquidity they must convert their
+ * spoke-chain tokens into the vault-token representation that lives on the hub chain.
+ * `AssetService` encapsulates that two-step conversion:
+ *
+ * - **Deposit** (wrap): spoke token → hub vault token → StatAToken  (`executeDeposit` / `deposit`)
+ * - **Withdraw** (unwrap): StatAToken → hub vault token → spoke token  (`executeWithdraw` / `withdraw`)
+ *
+ * It also handles allowance checks and ERC-20 approvals for the above flows, and
+ * provides helpers to query a user's current DEX deposit balance and to convert
+ * between share and asset amounts for any ERC-4626 token.
+ *
+ * Cross-chain users go through the hub-and-spoke relay; hub-chain (Sonic) users
+ * execute directly without a relay step.
+ *
+ * @namespace SodaxFeatures
+ */
 export class AssetService {
-  public readonly config: AssetServiceConfig;
-  private readonly relayerApiEndpoint: HttpUrl;
-  private readonly hubProvider: EvmHubProvider;
-  private readonly configService: ConfigService;
+  public readonly relayerApiEndpoint: HttpUrl;
+  public readonly hubProvider: HubProvider;
+  public readonly spoke: SpokeService;
+  public readonly config: ConfigService;
+  public readonly concentratedLiquidityConfig: ConcentratedLiquidityConfig;
 
-  constructor({ config, hubProvider, relayerApiEndpoint, configService }: AssetServiceConstructorParams) {
-    this.configService = configService;
-    this.relayerApiEndpoint = relayerApiEndpoint ?? DEFAULT_RELAYER_API_ENDPOINT;
+  constructor({ config, hubProvider, spoke }: AssetServiceConstructorParams) {
+    this.config = config;
+    this.spoke = spoke;
+    this.relayerApiEndpoint = config.relay.relayerApiEndpoint;
     this.hubProvider = hubProvider;
-    // Use default config if none provided
-    if (config) {
-      this.config = {
-        concentratedLiquidityConfig: config.concentratedLiquidityConfig,
-      };
-    } else {
-      this.config = {
-        concentratedLiquidityConfig: getConcentratedLiquidityConfig(),
-      };
-    }
+    this.concentratedLiquidityConfig = config.dex.concentratedLiquidityConfig;
   }
 
   /**
-   * Check whether sufficient allowance is available for an asset deposit action.
-   * This determines whether a contract/manager can transfer the specified ERC20 asset on behalf of the user,
-   * or whether approval or, for Stellar, trustlines are needed.
+   * Check whether sufficient allowance exists for a DEX deposit action.
    *
-   * For EVM-based chains, checks ERC20 allowance against the asset manager (for EvmSpokeProvider),
-   * or against the user router contract (for SonicSpokeProvider on Sonic chains).
-   * For Stellar, verifies if the sender's trustline is sufficient.
-   * For all other chains, returns `true` (approval is not required).
+   * The required spender differs by chain type:
+   * - **EVM spoke chains**: the chain's `assetManager` contract.
+   * - **Hub chain (Sonic)**: the user's hub wallet address (contract wallet abstraction).
+   * - **Stellar**: verifies the sender's trustline via `SpokeService.isAllowanceValid`.
+   * - **All other non-EVM chains**: always returns `true` (no on-chain approval needed).
    *
-   * @param {AssetDepositParams<S>} params - Object containing:
-   *   - depositParams: Deposit input parameters (asset address, amount, etc.)
-   *   - spokeProvider: The provider instance for the originating chain
-   * @returns {Promise<Result<boolean, AssetServiceError<'ALLOWANCE_CHECK_FAILED'>>>}
-   *   Resolves with Result.ok(true) if allowance/trustline is sufficient, or Result.ok(false) if not,
-   *   or Result.error if allowance/trustline check failed.
-   *
-   * @example
-   * const result = await assetService.isAllowanceValid({
-   *   depositParams: { asset: '0x...', amount: 1000n },
-   *   spokeProvider,
-   * });
-   * if (!result.ok) {
-   *   // Handle error (e.g. result.error)
-   * } else if (!result.value) {
-   *   // Approval or trustline is needed
-   * }
+   * @param _params - Deposit action parameters including the asset address, amount,
+   *   source chain key, and source address.
+   * @returns `Result<boolean>` — `true` if the spender already has sufficient allowance
+   *   (or approval is not required for the chain), `false` if an approval transaction
+   *   is needed before depositing.
    */
-  public async isAllowanceValid<S extends SpokeProvider = SpokeProvider>({
-    params,
-    spokeProvider,
-  }: AssetDepositParams<S>): Promise<Result<boolean, AssetServiceError<'ALLOWANCE_CHECK_FAILED'>>> {
+  public async isAllowanceValid<K extends SpokeChainKey, Raw extends boolean>(
+    _params: AssetDepositAction<K, Raw>,
+  ): Promise<Result<boolean>> {
+    const { params } = _params;
     try {
       invariant(params.amount > 0n, 'Amount must be greater than 0');
       invariant(params.asset.length > 0, 'Source asset is required');
 
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
+      if (isStellarChainKeyType(params.srcChainKey)) {
+        const result = await this.spoke.isAllowanceValid({
+          srcChainKey: params.srcChainKey,
+          token: params.asset,
+          amount: params.amount,
+          owner: params.srcAddress,
+        } satisfies SpokeIsAllowanceValidParamsStellar);
 
-      if (isStellarSpokeProviderType(spokeProvider)) {
-        return {
-          ok: true,
-          value: await StellarSpokeService.hasSufficientTrustline(params.asset, params.amount, spokeProvider),
-        };
+        if (!result.ok) return result;
+
+        return result;
+      }
+
+      if (isEvmChainKeyType(params.srcChainKey) || isHubChainKeyType(params.srcChainKey)) {
+        const spender = isHubChainKeyType(params.srcChainKey)
+          ? await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
+          : this.config.sodaxConfig.chains[params.srcChainKey].addresses.assetManager;
+
+        const result = await this.spoke.isAllowanceValid({
+          srcChainKey: params.srcChainKey,
+          token: params.asset,
+          amount: params.amount,
+          owner: params.srcAddress,
+          spender: spender as GetAddressType<EvmChainKey | HubChainKey>,
+        });
+
+        if (!result.ok) return result;
+
+        return result;
       }
 
       // For non-EVM/non-Sonic chains, no approval is required
-      if (isEvmSpokeProviderType(spokeProvider) || isSonicSpokeProviderType(spokeProvider)) {
-        const spender = isHubSpokeProvider(spokeProvider, this.hubProvider)
-          ? await HubService.getUserRouter(
-              walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-              this.hubProvider,
-            )
-          : spokeProvider.chainConfig.addresses.assetManager;
-
-        const result = await Erc20Service.isAllowanceValid(
-          params.asset as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-          params.amount,
-          walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-          spender as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-          spokeProvider,
-        );
-
-        if (!result.ok) {
-          return {
-            ok: false,
-            error: {
-              code: 'ALLOWANCE_CHECK_FAILED',
-              data: {
-                error: result.error,
-                payload: params,
-              },
-            },
-          };
-        }
-
-        return {
-          ok: true,
-          value: result.value,
-        };
-      }
-
       return {
         ok: true,
         value: true,
@@ -268,268 +176,316 @@ export class AssetService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'ALLOWANCE_CHECK_FAILED',
-          data: {
-            error: error,
-            payload: params,
-          },
-        },
+        error,
       };
     }
   }
 
   /**
-   * Approves the amount spending for deposit actions.
-   * @param params - The parameters for the asset transaction.
-   * @param spokeProvider - The spoke provider.
-   * @param raw - Whether to return the raw transaction hash instead of the transaction receipt
-   * @returns {Promise<Result<TxReturnType<S, R>>>} - Returns the raw transaction payload or transaction hash
+   * Submit an ERC-20 approval (or Stellar trustline operation) required before depositing.
    *
-   * @example
-   * const result = await assetService.approve(
-   *   {
-   *     asset: '0x...', // asset address
-   *     amount: 1000n, // amount to deposit
-   *   },
-   *   spokeProvider, // EvmSpokeProvider or SonicSpokeProvider instance
-   *   true // Optional raw flag to return the raw transaction hash instead of the transaction receipt
-   * );
+   * Supported chain types:
+   * - **Stellar**: calls `SpokeService.approve` for the trustline.
+   * - **EVM spoke & hub chains**: calls `SpokeService.approve` with the appropriate
+   *   spender (asset manager for EVM spokes, hub wallet for Sonic).
+   * - **Other chains**: returns an error — approval is not supported or not needed.
    *
+   * @param _params - Deposit action parameters including the asset address and amount to approve.
+   * @returns `Result<TxReturnType<K, Raw>>` — the transaction hash (when `raw` is `false`)
+   *   or the unsigned transaction bytes (when `raw` is `true`).
    */
-  public async approve<S extends SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<AssetDepositParams<S> & OptionalRaw<R>>): Promise<
-    Result<TxReturnType<S, R>, AssetServiceError<'APPROVAL_FAILED'>>
-  > {
+  public async approve<K extends SpokeChainKey, Raw extends boolean>(
+    _params: AssetDepositAction<K, Raw>,
+  ): Promise<Result<TxReturnType<K, Raw>>> {
+    const { params } = _params;
     try {
       invariant(params.amount > 0n, 'Amount must be greater than 0');
       invariant(params.asset.length > 0, 'Source asset is required');
 
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
+      if (isStellarChainKeyType(params.srcChainKey)) {
+        invariant(
+          isOptionalStellarWalletProviderType(_params.walletProvider),
+          'Invalid wallet provider. Expected Stellar wallet provider.',
+        );
+        const coreParams = {
+          srcChainKey: params.srcChainKey,
+          token: params.asset,
+          amount: params.amount,
+          owner: params.srcAddress as GetAddressType<StellarChainKey>,
+        } as const;
 
-      if (isStellarSpokeProviderType(spokeProvider)) {
-        const result = await StellarSpokeService.requestTrustline(params.asset, params.amount, spokeProvider, raw);
+        const result = await this.spoke.approve<StellarChainKey, boolean>(
+          _params.raw
+            ? {
+                ...coreParams,
+                raw: true,
+              }
+            : {
+                ...coreParams,
+                raw: false,
+                walletProvider: _params.walletProvider,
+              },
+        );
+
+        if (!result.ok) return result;
+
         return {
           ok: true,
-          value: result satisfies TxReturnType<StellarSpokeProviderType, R> as TxReturnType<S, R>,
+          value: result.value satisfies TxReturnType<StellarChainKey, boolean> as TxReturnType<K, Raw>,
         };
       }
 
-      if (isEvmSpokeProviderType(spokeProvider) || isSonicSpokeProviderType(spokeProvider)) {
+      if (isEvmSpokeOnlyChainKeyType(params.srcChainKey) || isHubChainKeyType(params.srcChainKey)) {
         invariant(isAddress(params.asset), 'Invalid source asset address for EVM chain');
+        invariant(
+          isOptionalEvmWalletProviderType(_params.walletProvider),
+          'Invalid wallet provider. Expected Evm wallet provider.',
+        );
 
-        const spender = isHubSpokeProvider(spokeProvider, this.hubProvider)
-          ? await HubService.getUserRouter(
-              walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-              this.hubProvider,
-            )
-          : spokeProvider.chainConfig.addresses.assetManager;
+        const spender = isHubChainKeyType(params.srcChainKey)
+          ? await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
+          : this.config.sodaxConfig.chains[params.srcChainKey].addresses.assetManager;
 
-        const result = (await Erc20Service.approve(
-          params.asset,
-          params.amount,
-          spender as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-          spokeProvider,
-          raw,
-        )) satisfies TxReturnType<EvmSpokeProviderType, R> as TxReturnType<S, R>;
+        const coreParams = {
+          srcChainKey: params.srcChainKey,
+          token: params.asset,
+          amount: params.amount,
+          owner: params.srcAddress as GetAddressType<EvmChainKey | HubChainKey>,
+          spender: spender as GetAddressType<EvmChainKey | HubChainKey>,
+        } as const;
+
+        const result = await this.spoke.approve<HubChainKey | EvmSpokeOnlyChainKey, Raw>({
+          ...coreParams,
+          raw: _params.raw,
+          walletProvider: _params.walletProvider,
+        });
+
+        if (!result.ok) {
+          return result;
+        }
 
         return {
           ok: true,
-          value: result,
+          value: result.value satisfies TxReturnType<EvmSpokeOnlyChainKey, Raw> as TxReturnType<K, Raw>,
         };
       }
 
       return {
         ok: false,
-        error: {
-          code: 'APPROVAL_FAILED',
-          data: {
-            error: new Error('Approve only supported for EVM/Stellar spoke chains'),
-            payload: params,
-          },
-        },
+        error: new Error('Approve only supported for EVM/Stellar spoke chains'),
       };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'APPROVAL_FAILED',
-          data: {
-            error: error,
-            payload: params,
-          },
-        },
+        error,
       };
     }
   }
 
   /**
-   * Execute deposit action - wraps tokens and prepares for liquidity provision
+   * Build and submit the spoke-side transaction that wraps tokens into the pool's StatAToken.
+   *
+   * On the hub the following calls are batched into a single payload:
+   * 1. If the asset is not already a vault token: `ERC20.approve` + `VaultToken.deposit`
+   *    to convert the spoke-chain asset into the hub vault token.
+   * 2. `ERC20.approve(vault → stataToken)` + `ERC4626.deposit(stataToken)` to wrap the
+   *    vault token into the StatAToken used by the CL pool.
+   *
+   * The payload is delivered to the hub via `SpokeService.deposit`. If a `dst` override
+   * is provided, the StatATokens are minted into a different hub wallet (cross-account
+   * liquidity provision).
+   *
+   * @param _params - Deposit action parameters including the original asset address,
+   *   amount, target pool token (StatAToken), and optional destination override.
+   * @returns `Result<IntentTxResult<K, Raw>>` — on success, contains the spoke-chain tx
+   *   and relay data for cross-chain packet tracking.
    */
-  public async executeDeposit<S extends SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<AssetDepositParams<S> & OptionalRaw<R>>): Promise<
-    Result<TxReturnType<S, R>, AssetServiceError<'CREATE_DEPOSIT_INTENT_FAILED'>> & RelayOptionalExtraData
-  > {
+  public async executeDeposit<K extends SpokeChainKey, Raw extends boolean>(
+    _params: AssetDepositAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params, skipSimulation } = _params;
     try {
       invariant(params.amount > 0n, 'Amount must be greater than 0');
       invariant(params.asset.length > 0, 'Source asset is required');
       invariant(params.poolToken.length > 0, 'Pool token is required');
 
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const fromHubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
-      let recipient = fromHubWallet;
-
-      if (params.dst) {
-        if (isSpokeProviderObjectType(params.dst)) {
-          recipient = await HubService.getUserHubWalletAddress(
-            await params.dst.spokeProvider.walletProvider.getWalletAddress(),
-            params.dst.spokeProvider.chainConfig.chain.id,
-            this.hubProvider,
-          );
-        } else if (isRawDestinationParams(params.dst)) {
-          recipient = await HubService.getUserHubWalletAddress(
-            params.dst.toAddress,
-            params.dst.toChainId,
-            this.hubProvider,
-          );
-        } else {
-          throw new Error('Invalid destination parameters');
-        }
-      }
+      const [fromHubWallet, recipient] = params.dst
+        ? await Promise.all([
+            this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey),
+            this.hubProvider.getUserHubWalletAddress(params.dst.dstAddress, params.dst.dstChainKey),
+          ])
+        : await this.hubProvider
+            .getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
+            .then(w => [w, w] as const);
 
       const calls = await this.getTokenWrapAction(
         params.asset,
-        spokeProvider.chainConfig.chain.id,
+        params.srcChainKey,
         params.amount,
         params.poolToken,
         recipient,
       );
       const data: Hex = encodeContractCalls(calls);
-      const txResult = await SpokeService.deposit(
-        {
-          from: walletAddress,
-          token: params.asset,
-          amount: params.amount,
-          data,
-        } satisfies GetSpokeDepositParamsType<SpokeProvider> as GetSpokeDepositParamsType<S>,
-        spokeProvider,
-        this.hubProvider,
-        raw,
+
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        to: recipient,
+        token: params.asset as GetTokenAddressType<K>,
+        amount: params.amount,
+        data,
+        skipSimulation,
+      } as const;
+
+      const txResult = await this.spoke.deposit(
+        _params.raw
+          ? {
+              ...coreParams,
+              raw: true,
+            }
+          : {
+              ...coreParams,
+              raw: false,
+              walletProvider: _params.walletProvider as GetWalletProviderType<K>,
+            },
       );
+
+      if (!txResult.ok) {
+        return {
+          ok: false,
+          error: txResult.error,
+        };
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: fromHubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, Raw> as TxReturnType<K, Raw>,
+          relayData: { address: fromHubWallet, payload: data },
         },
       };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'CREATE_DEPOSIT_INTENT_FAILED',
-          data: {
-            error: error,
-            payload: params,
-          },
-        },
+        error,
       };
     }
   }
 
   /**
-   * Execute withdraw action - withdraws tokens from a position
+   * Build and submit the spoke-side transaction that unwraps StatATokens back to the original asset.
+   *
+   * On the hub the following calls are batched into a single payload:
+   * 1. `ERC4626.redeem(stataToken)` to convert StatAToken shares back to vault tokens.
+   * 2. `VaultToken.withdraw` to convert vault tokens back to the hub asset.
+   * 3. Transfer the unwrapped asset to the recipient:
+   *    - Hub chain + native Sonic (wS): `wrappedSonic.withdrawTo(recipient, amount)`
+   *    - Hub chain + other ERC-20: `ERC20.transfer(recipient, amount)`
+   *    - Cross-chain: `AssetManager.transfer(...)` which initiates the spoke delivery.
+   *
+   * Special case: bnUSD vault tokens skip the StatAToken redeem step and go directly
+   * to `VaultToken.withdraw`.
+   *
+   * @param _params - Withdraw action parameters including the asset address, amount
+   *   (in StatAToken shares), pool token address, and optional destination override.
+   * @returns `Result<IntentTxResult<K, Raw>>` — on success, contains the spoke-chain tx
+   *   and relay data for cross-chain packet tracking.
    */
-  public async executeWithdraw<S extends SpokeProvider, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<AssetWithdrawParams<S> & OptionalRaw<R>>): Promise<
-    Result<TxReturnType<S, R>, AssetServiceError<'CREATE_WITHDRAW_LIQUIDITY_INTENT_FAILED'>> & RelayOptionalExtraData
-  > {
-    invariant(params.amount > 0n, 'Amount must be greater than 0');
-    invariant(params.asset.length > 0, 'Source asset is required');
-    invariant(params.poolToken.length > 0, 'Pool token is required');
+  public async executeWithdraw<K extends SpokeChainKey, Raw extends boolean>(
+    _params: AssetWithdrawAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params, skipSimulation } = _params;
+    try {
+      invariant(params.amount > 0n, 'Amount must be greater than 0');
+      invariant(params.asset.length > 0, 'Source asset is required');
+      invariant(params.poolToken.length > 0, 'Pool token is required');
 
-    const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-    const fromHubWallet = await HubService.getUserHubWalletAddress(
-      walletAddress,
-      spokeProvider.chainConfig.chain.id,
-      this.hubProvider,
-    );
-    let recipient = walletAddress;
-    let dstChainId = spokeProvider.chainConfig.chain.id;
+      const [fromHubWallet, recipient] = params.dst
+        ? await Promise.all([
+            this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey),
+            this.hubProvider.getUserHubWalletAddress(params.dst.dstAddress, params.dst.dstChainKey),
+          ])
+        : [await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey), params.srcAddress];
+      const dstChainKey: SpokeChainKey = params.dst?.dstChainKey ?? params.srcChainKey;
 
-    if (params.dst) {
-      if (isSpokeProviderObjectType(params.dst)) {
-        recipient = await HubService.getUserHubWalletAddress(
-          await params.dst.spokeProvider.walletProvider.getWalletAddress(),
-          params.dst.spokeProvider.chainConfig.chain.id,
-          this.hubProvider,
-        );
-        dstChainId = params.dst.spokeProvider.chainConfig.chain.id;
-      } else if (isRawDestinationParams(params.dst)) {
-        recipient = await HubService.getUserHubWalletAddress(
-          params.dst.toAddress,
-          params.dst.toChainId,
-          this.hubProvider,
-        );
-        dstChainId = params.dst.toChainId;
-      } else {
-        throw new Error('Invalid destination parameters');
-      }
-    }
+      const calls = await this.getTokenUnwrapAction(
+        dstChainKey,
+        params.asset,
+        params.amount,
+        fromHubWallet,
+        encodeAddress(dstChainKey, recipient),
+      );
 
-    const calls = await this.getTokenUnwrapAction(
-      dstChainId,
-      params.asset,
-      params.amount,
-      fromHubWallet,
-      encodeAddress(dstChainId, recipient),
-    );
-
-    const data = encodeContractCalls(calls);
-
-    const txResult = await SpokeService.callWallet(fromHubWallet, data, spokeProvider, this.hubProvider, raw);
-    return {
-      ok: true,
-      value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-      data: {
-        address: recipient as `0x${string}`,
+      const data = encodeContractCalls(calls);
+      const coreParams = {
+        srcAddress: recipient as GetAddressType<K>,
+        srcChainKey: dstChainKey as K,
+        dstChainKey: this.hubProvider.chainConfig.chain.key,
+        dstAddress: fromHubWallet,
         payload: data,
-      },
-    };
+        skipSimulation,
+      };
+
+      const sendMessageParams = _params.raw
+        ? ({
+            ...coreParams,
+            raw: true,
+          } satisfies SendMessageParams<K, true>)
+        : ({
+            ...coreParams,
+            raw: false,
+            walletProvider: _params.walletProvider,
+          } satisfies SendMessageParams<K, false>);
+
+      const txResult = await this.spoke.sendMessage(sendMessageParams);
+
+      if (!txResult.ok) {
+        return {
+          ok: false,
+          error: txResult.error,
+        };
+      }
+
+      return {
+        ok: true,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, boolean> as TxReturnType<K, Raw>,
+          relayData: { address: recipient as `0x${string}`, payload: data },
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error,
+      };
+    }
   }
 
   /**
-   * Check if the asset is SODA and the pool token is XSODA (requires stake/unstake if yes)
-   * @param chainId - The chain id
-   * @param asset - The asset address
-   * @param poolToken - The pool token address
-   * @returns True if the asset is SODA and the pool token is XSODA, false otherwise
+   * Return whether the user is depositing SODA into an xSoda pool position.
+   *
+   * xSoda (the ERC-4626 staking vault) is a valid DEX pool token. When the original
+   * asset is SODA and the pool token is xSoda, the deposit flow must go through the
+   * staking contract (stake SODA → receive xSoda) rather than the standard wrap path.
+   * Callers should check this before calling `executeDeposit` so they can route the
+   * transaction appropriately.
+   *
+   * @param chainId - The spoke chain the asset originates from.
+   * @param asset - The original asset address on the spoke chain.
+   * @param poolToken - The hub-chain pool token address (the StatAToken or vault token).
+   * @returns `true` if the asset maps to SODA and the pool token is the hub's xSoda address.
+   * @throws If the spoke token config cannot be found for `asset` on `chainId`.
    */
   public isSodaAsXSodaInPool({
     chainId,
     asset,
     poolToken,
   }: {
-    chainId: SpokeChainId;
+    chainId: SpokeChainKey;
     asset: OriginalAssetAddress;
     poolToken: Address;
   }): boolean {
-    const spokeToken = this.configService.getSpokeTokenFromOriginalAssetAddress(chainId, asset);
+    const spokeToken = this.config.getSpokeTokenFromOriginalAssetAddress(chainId, asset);
 
     if (!spokeToken) {
       throw new Error(`[isSodaDepositToXSoda] Spoke token not found for asset ${asset}`);
@@ -542,203 +498,131 @@ export class AssetService {
   }
 
   /**
-   * Deposit tokens and wait for the transaction to be relayed to the hub.
+   * Wrap tokens into the pool's StatAToken and wait for the cross-chain relay to complete.
    *
-   * This method wraps {@link executeDeposit} and performs post-processing to relay
-   * the resulting transaction to the hub. It returns both the spoke chain
-   * transaction hash and the hub transaction hash (post-relay).
+   * Calls `executeDeposit` to broadcast on the spoke chain, then blocks until the
+   * relayer delivers the packet to the hub (or the optional timeout elapses).
+   * When the source is the hub chain itself the relay step is skipped.
    *
-   * @typeParam S - The type of SpokeProvider.
-   * @param params - Parameters for the deposit operation:
-   *   - depositParams: Parameters for the deposit intent (asset, amount, poolToken, etc).
-   *   - spokeProvider: The spoke provider instance (EvmSpokeProvider or SonicSpokeProvider).
-   *   - timeout (optional): Timeout in ms to wait for hub relay (default: 60000).
-   *
-   * @returns A promise that resolves to a {@link Result} containing a tuple with
-   * [spokeTxHash, hubTxHash] as value on success, or an {@link AssetServiceError} on failure.
-   *
-   * @example
-   * const result = await assetService.deposit({
-   *   depositParams: {
-   *     asset: '0x...',      // asset address
-   *     amount: 1000n,       // amount to deposit
-   *     poolToken: '0x...',  // pool token address
-   *   },
-   *   spokeProvider,          // instance of EvmSpokeProvider or SonicSpokeProvider
-   *   timeout: 30000,         // optional, in ms
-   * });
-   *
-   * if (!result.ok) {
-   *   // handle error
-   * } else {
-   *   const [spokeTxHash, hubTxHash] = result.value;
-   *   console.log('Deposit transaction hashes:', { spokeTxHash, hubTxHash });
-   * }
+   * @param _params - Deposit action parameters including the asset address, amount,
+   *   target pool token, and an optional `timeout` (ms) for the relay wait.
+   * @returns `Result<TxHashPair>` — on success, contains `srcChainTxHash` (spoke) and
+   *   `dstChainTxHash` (hub) once the relay packet has been confirmed.
    */
-  public async deposit<S extends SpokeProvider>({
-    params: depositParams,
-    spokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  }: Prettify<AssetDepositParams<S> & OptionalTimeout>): Promise<
-    Result<[SpokeTxHash, HubTxHash], AssetServiceError<AssetServiceErrorCode>>
-  > {
+  public async deposit<K extends SpokeChainKey>(_params: AssetDepositAction<K, false>): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.executeDeposit({ params: depositParams, spokeProvider, raw: false });
+      const txResult = await this.executeDeposit(_params);
+      if (!txResult.ok) return txResult;
 
-      if (!txResult.ok) {
-        return txResult satisfies Result<[SpokeTxHash, HubTxHash], AssetServiceError<AssetServiceErrorCode>> as Result<
-          [SpokeTxHash, HubTxHash],
-          AssetServiceError<AssetServiceErrorCode>
-        >;
-      }
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
+          timeout: timeout,
+        });
+        if (!packetResult.ok) return packetResult;
 
-      let intentTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          isSolanaSpokeProviderType(spokeProvider) ? txResult.data : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
-          timeout,
-        );
-
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              data: {
-                error: packetResult.error,
-                payload: txResult.value,
-              } as GetAssetServiceError<'SUBMIT_TX_FAILED'>,
-            },
-          };
-        }
-
-        intentTxHash = packetResult.value.dst_tx_hash;
+        hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        intentTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, intentTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: 'DEPOSIT_UNKNOWN_ERROR',
-          data: {
-            error: error,
-            payload: depositParams,
-          },
-        },
-      };
+      return { ok: false, error };
     }
   }
 
   /**
-   * Withdraw and wait for the transaction to be relayed to the hub
-   * This method wraps executeWithdraw and relays the transaction to the hub
+   * Unwrap StatATokens back to the original asset and wait for the cross-chain relay to complete.
    *
-   * @example
-   * const result = await assetService.withdraw(
-   *   {
-   *     asset: '0x...', // asset address
-   *     amount: 1000n, // amount to withdraw
-   *     poolToken: '0x...', // pool token address
-   *   },
-   *   spokeProvider, // EvmSpokeProvider or SonicSpokeProvider instance
-   *   30000 // Optional timeout in milliseconds (default: 60000)
-   * );
+   * Calls `executeWithdraw` to broadcast on the spoke chain, then blocks until the
+   * relayer delivers the packet to the hub (or the optional timeout elapses).
+   * When the source is the hub chain itself the relay step is skipped.
    *
-   * if (!result.ok) {
-   *   // Handle error
-   * }
-   *
-   * const [spokeTxHash, hubTxHash] = result.value;
-   * console.log('Withdraw transaction hashes:', { spokeTxHash, hubTxHash });
+   * @param _params - Withdraw action parameters including the asset address, amount
+   *   (in StatAToken shares), pool token address, and an optional `timeout` (ms).
+   * @returns `Result<TxHashPair>` — on success, contains `srcChainTxHash` (spoke) and
+   *   `dstChainTxHash` (hub) once the relay packet has been confirmed.
    */
-  public async withdraw<S extends SpokeProvider>({
-    params,
-    spokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  }: Prettify<AssetWithdrawParams<S> & OptionalTimeout>): Promise<
-    Result<[SpokeTxHash, HubTxHash], AssetServiceError<AssetServiceErrorCode>>
-  > {
+  public async withdraw<K extends SpokeChainKey>(_params: AssetWithdrawAction<K, false>): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.executeWithdraw({ params, spokeProvider, raw: false });
+      const txResult = await this.executeWithdraw(_params);
+      if (!txResult.ok) return txResult;
 
-      if (!txResult.ok) {
-        return txResult as Result<[SpokeTxHash, HubTxHash], AssetServiceError<AssetServiceErrorCode>>;
-      }
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
+          timeout: timeout,
+        });
+        if (!packetResult.ok) return packetResult;
 
-      let intentTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          isSolanaSpokeProviderType(spokeProvider) ? txResult.data : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
-          timeout,
-        );
-
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              data: {
-                error: packetResult.error,
-                payload: txResult.value,
-              } as GetAssetServiceError<'SUBMIT_TX_FAILED'>,
-            },
-          };
-        }
-
-        intentTxHash = packetResult.value.dst_tx_hash;
+        hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        intentTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, intentTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: 'DEPOSIT_UNKNOWN_ERROR',
-          data: {
-            error: error,
-            payload: params,
-          },
-        },
-      };
+      return { ok: false, error };
     }
   }
 
+  /**
+   * Build the hub-side contract calls that wrap a spoke asset into the DEX pool token.
+   *
+   * The sequence depends on what the pool token is:
+   * - If the pool token is the vault token itself (e.g. bnUSD), only the vault deposit
+   *   calls are emitted (ERC-20 approve + `VaultToken.deposit`).
+   * - Otherwise the vault token is further wrapped into a StatAToken via the
+   *   `StataTokenFactory`: ERC-20 approve + `ERC4626.deposit(stataToken)`.
+   *
+   * The resulting array of `EvmContractCall` objects is intended to be batched with
+   * `encodeContractCalls` inside `executeDeposit`.
+   *
+   * @param address - The original asset address on the spoke chain.
+   * @param spokeChainId - The spoke chain the asset originates from (used for config lookup).
+   * @param amount - The amount of the original asset to wrap (in original asset decimals).
+   * @param poolToken - The target pool token address (StatAToken or vault token).
+   * @param recipient - The hub wallet address that will receive the wrapped tokens.
+   * @returns An array of `EvmContractCall` objects encoding the wrap sequence.
+   * @throws If the asset is not found in config, or if the resolved DEX token does not
+   *   match `poolToken`.
+   */
   public async getTokenWrapAction(
     address: OriginalAssetAddress,
-    spokeChainId: SpokeChainId,
+    spokeChainId: SpokeChainKey,
     amount: bigint,
     poolToken: Address,
     recipient: Address,
   ): Promise<EvmContractCall[]> {
-    const assetConfig = this.configService.getHubAssetInfo(spokeChainId, address);
+    const assetConfig = this.config.getSpokeTokenFromOriginalAssetAddress(spokeChainId, address);
     if (!assetConfig) {
       throw new Error('[withdrawData] Hub asset not found');
     }
 
     const calls: EvmContractCall[] = [];
-    if (!this.configService.isValidVault(assetConfig.asset)) {
-      calls.push(Erc20Service.encodeApprove(assetConfig.asset, assetConfig.vault, amount));
-      calls.push(EvmVaultTokenService.encodeDeposit(assetConfig.vault, assetConfig.asset, amount));
+    if (!this.config.isValidVault(assetConfig.hubAsset)) {
+      calls.push(Erc20Service.encodeApprove(assetConfig.hubAsset, assetConfig.vault, amount));
+      calls.push(EvmVaultTokenService.encodeDeposit(assetConfig.vault, assetConfig.hubAsset, amount));
     }
-    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(assetConfig.decimal, amount);
+    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(assetConfig.decimals, amount);
 
     if (poolToken.toLowerCase() === assetConfig.vault.toLowerCase()) {
       return calls;
     }
 
     const dexToken: Address = await this.hubProvider.publicClient.readContract({
-      address: this.config.concentratedLiquidityConfig.stataTokenFactory,
+      address: this.config.sodaxConfig.dex.concentratedLiquidityConfig.stataTokenFactory,
       abi: stataTokenFactoryAbi,
       functionName: 'getStataToken',
       args: [assetConfig.vault],
@@ -754,28 +638,38 @@ export class AssetService {
   }
 
   /**
-   * Get the token unwrap action for a given asset
-   * @param address - The address of the asset
-   * @param dstChainId - The destination spoke chain id
-   * @param amount - The amount of the wrapped assets
-   * @param userAddress - The address of the user wallet
-   * @param recipient - The address of the recipient
-   * @returns The token unwrap action
+   * Build the hub-side contract calls that unwrap a DEX pool token back to the original asset.
+   *
+   * The sequence depends on the token type and destination chain:
+   * 1. If the pool token is a StatAToken (non-bnUSD): `ERC4626.redeem` to get vault tokens.
+   * 2. `VaultToken.withdraw` to convert vault tokens to the hub asset.
+   * 3. Transfer to recipient:
+   *    - Hub chain + native Sonic (wS): `wrappedSonic.withdrawTo`
+   *    - Hub chain + other ERC-20: `ERC20.transfer`
+   *    - Cross-chain: `AssetManager.transfer` (initiates spoke delivery)
+   *
+   * @param dstChainKey - The destination spoke chain (determines transfer encoding).
+   * @param address - The original asset address on the destination spoke chain.
+   * @param amount - The amount of StatAToken shares to redeem.
+   * @param userAddress - The hub wallet address of the user (used as ERC-4626 redeem owner).
+   * @param recipient - The encoded recipient address on the destination chain.
+   * @returns An array of `EvmContractCall` objects encoding the unwrap sequence.
+   * @throws If the asset is not found in config, or if an ERC-4626 conversion fails.
    */
   public async getTokenUnwrapAction(
-    dstChainId: SpokeChainId,
+    dstChainKey: SpokeChainKey,
     address: OriginalAssetAddress,
     amount: bigint,
     userAddress: Address,
     recipient: Hex,
   ): Promise<EvmContractCall[]> {
-    const assetConfig = this.configService.getHubAssetInfo(dstChainId, address);
+    const assetConfig = this.config.getSpokeTokenFromOriginalAssetAddress(dstChainKey, address);
     if (!assetConfig) {
       throw new Error('[withdrawData] Hub asset not found');
     }
 
     let dexToken: Address = await this.hubProvider.publicClient.readContract({
-      address: this.config.concentratedLiquidityConfig.stataTokenFactory,
+      address: this.config.sodaxConfig.dex.concentratedLiquidityConfig.stataTokenFactory,
       abi: stataTokenFactoryAbi,
       functionName: 'getStataToken',
       args: [assetConfig.vault],
@@ -791,20 +685,22 @@ export class AssetService {
       SodaTokens.bnUSD.address.toLowerCase() !== assetConfig.vault.toLowerCase() &&
       dexToken.toLowerCase() !== '0x0000000000000000000000000000000000000000'
     ) {
-      vaultAmount = await this.getUnwrappedAmount(dexToken, amount);
+      const unwrapped = await this.getUnwrappedAmount(dexToken, amount);
+      if (!unwrapped.ok) throw unwrapped.error;
+      vaultAmount = unwrapped.value;
       calls.push(Erc4626Service.encodeRedeem(dexToken, amount, userAddress, userAddress));
     }
 
-    calls.push(EvmVaultTokenService.encodeWithdraw(assetConfig.vault, assetConfig.asset, vaultAmount));
-    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(assetConfig.decimal, vaultAmount);
+    calls.push(EvmVaultTokenService.encodeWithdraw(assetConfig.vault, assetConfig.hubAsset, vaultAmount));
+    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(assetConfig.decimals, vaultAmount);
 
-    if (dstChainId === this.hubProvider.chainConfig.chain.id) {
+    if (dstChainKey === this.hubProvider.chainConfig.chain.key) {
       if (
-        assetConfig.asset.toLowerCase() ===
-        this.configService.spokeChainConfig[dstChainId].addresses.wrappedSonic.toLowerCase()
+        assetConfig.hubAsset.toLowerCase() ===
+        this.config.spokeChainConfig[dstChainKey].addresses.wrappedSonic.toLowerCase()
       ) {
         const withdrawToCall = {
-          address: assetConfig.asset,
+          address: assetConfig.hubAsset,
           value: 0n,
           data: encodeFunctionData({
             abi: wrappedSonicAbi,
@@ -815,12 +711,12 @@ export class AssetService {
 
         calls.push(withdrawToCall);
       } else {
-        calls.push(Erc20Service.encodeTransfer(assetConfig.asset, recipient, translatedAmount));
+        calls.push(Erc20Service.encodeTransfer(assetConfig.hubAsset, recipient, translatedAmount));
       }
     } else {
       calls.push(
         EvmAssetManagerService.encodeTransfer(
-          assetConfig.asset,
+          assetConfig.hubAsset,
           recipient,
           translatedAmount,
           this.hubProvider.chainConfig.addresses.assetManager,
@@ -832,48 +728,73 @@ export class AssetService {
   }
 
   /**
-   * Helper method to convert assets to shares (wrapped amount)
-   * EX BTC -> BTC deposited in moneymarket earning intrest.
-   * @param dexToken - The ERC4626 token address
-   * @param assetAmount - The amount of underlying assets
-   * @returns The equivalent amount of shares
+   * Convert an underlying asset amount to the equivalent number of ERC-4626 shares.
+   *
+   * For example: given an amount of the hub vault token, returns how many StatAToken
+   * shares that amount buys at the current exchange rate.
+   *
+   * @param dexToken - The ERC-4626 token (StatAToken) address on the hub chain.
+   * @param assetAmount - The amount of underlying assets to convert.
+   * @returns `Result<bigint>` — the equivalent share amount.
    */
-  public async getWrappedAmount(dexToken: Address, assetAmount: bigint): Promise<bigint> {
-    const shares = await Erc4626Service.convertToShares(dexToken, assetAmount, this.hubProvider);
-    if (!shares.ok) {
-      throw new Error('[getWrappedAmount] Failed to convert amount to shares');
+  public async getWrappedAmount(dexToken: Address, assetAmount: bigint): Promise<Result<bigint>> {
+    try {
+      const shares = await Erc4626Service.convertToShares(dexToken, assetAmount, this.hubProvider.publicClient);
+      if (!shares.ok) return shares;
+      return { ok: true, value: shares.value };
+    } catch (error) {
+      return { ok: false, error };
     }
-    return shares.value;
   }
 
   /**
-   * Helper method to convert shares to assets (unwrapped amount)
-   * EX  BTC deposited in moneymarket earning intrest -> BTC.
-   * @param dexToken - The ERC4626 token address
-   * @param shareAmount - The amount of shares
-   * @returns The equivalent amount of underlying assets
+   * Convert a number of ERC-4626 shares to the equivalent underlying asset amount.
+   *
+   * For example: given a StatAToken share amount, returns how many vault tokens
+   * those shares redeem for at the current exchange rate.
+   *
+   * @param dexToken - The ERC-4626 token (StatAToken) address on the hub chain.
+   * @param shareAmount - The number of shares to convert.
+   * @returns `Result<bigint>` — the equivalent underlying asset amount.
    */
-  public async getUnwrappedAmount(dexToken: Address, shareAmount: bigint): Promise<bigint> {
-    const assetAmount = await Erc4626Service.convertToAssets(dexToken, shareAmount, this.hubProvider);
-    if (!assetAmount.ok) {
-      throw new Error('[getUnwrappedAmount] Failed to convert amount to assets');
+  public async getUnwrappedAmount(dexToken: Address, shareAmount: bigint): Promise<Result<bigint>> {
+    try {
+      const assetAmount = await Erc4626Service.convertToAssets(dexToken, shareAmount, this.hubProvider.publicClient);
+      if (!assetAmount.ok) return assetAmount;
+      return { ok: true, value: assetAmount.value };
+    } catch (error) {
+      return { ok: false, error };
     }
-    return assetAmount.value;
   }
 
-  public async getDeposit(poolToken: Address, spokeProvider: SpokeProvider): Promise<bigint> {
-    const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-    const hubwallet = await HubService.getUserHubWalletAddress(
-      walletAddress,
-      spokeProvider.chainConfig.chain.id,
-      this.hubProvider,
-    );
-
-    return await this.hubProvider.publicClient.readContract({
-      address: poolToken,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [hubwallet],
-    });
+  /**
+   * Fetch the user's current DEX deposit balance for a given pool token.
+   *
+   * Resolves the user's hub wallet address from their spoke-chain address, then
+   * reads the ERC-20 balance of the pool token (StatAToken) held by that hub wallet.
+   * The returned amount is in StatAToken shares (not underlying asset units).
+   *
+   * @param poolToken - The pool token (StatAToken) address on the hub chain.
+   * @param walletAddress - The user's address on their spoke chain.
+   * @param chainKey - The spoke chain key used to derive the hub wallet address.
+   * @returns `Result<bigint>` — the StatAToken share balance of the user's hub wallet.
+   */
+  public async getDeposit(
+    poolToken: Address,
+    walletAddress: Address,
+    chainKey: SpokeChainKey,
+  ): Promise<Result<bigint>> {
+    try {
+      const hubwallet = await this.hubProvider.getUserHubWalletAddress(walletAddress, chainKey);
+      const value = await this.hubProvider.publicClient.readContract({
+        address: poolToken,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [hubwallet],
+      });
+      return { ok: true, value };
+    } catch (error) {
+      return { ok: false, error };
+    }
   }
 }

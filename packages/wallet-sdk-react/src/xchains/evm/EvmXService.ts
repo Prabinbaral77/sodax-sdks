@@ -1,25 +1,11 @@
-import { XService } from '@/core/XService';
-import {
-  ARBITRUM_MAINNET_CHAIN_ID,
-  AVALANCHE_MAINNET_CHAIN_ID,
-  BASE_MAINNET_CHAIN_ID,
-  BSC_MAINNET_CHAIN_ID,
-  ETHEREUM_MAINNET_CHAIN_ID,
-  HYPEREVM_MAINNET_CHAIN_ID,
-  KAIA_MAINNET_CHAIN_ID,
-  LIGHTLINK_MAINNET_CHAIN_ID,
-  OPTIMISM_MAINNET_CHAIN_ID,
-  POLYGON_MAINNET_CHAIN_ID,
-  REDBELLY_MAINNET_CHAIN_ID,
-  SONIC_MAINNET_CHAIN_ID,
-  type RpcConfig,
-  type XToken,
-} from '@sodax/types';
-import { getWagmiChainId, isNativeToken } from '@/utils';
+import { XService } from '@/core/XService.js';
+import { ChainKeys, type XToken } from '@sodax/types';
+import type { EvmTypeConfig } from '@/types/config.js';
+import { getRpcUrl, getWagmiChainId, isNativeToken } from '@/utils/index.js';
 
 import { type Address, type Chain, defineChain, erc20Abi } from 'viem';
 import { getPublicClient } from 'wagmi/actions';
-import { type Config, createConfig, http, createStorage, cookieStorage } from 'wagmi';
+import { type Config, type CreateConnectorFn, createConfig, http, createStorage, cookieStorage } from 'wagmi';
 import {
   mainnet,
   avalanche,
@@ -33,7 +19,10 @@ import {
   redbellyMainnet,
   kaia,
 } from 'wagmi/chains';
-import type { WagmiOptions } from '@/SodaxWalletProvider';
+type WagmiOptions = {
+  reconnectOnMount?: boolean;
+  ssr?: boolean;
+};
 
 // HyperEVM chain is not supported by viem, so we need to define it manually
 export const hyper = /*#__PURE__*/ defineChain({
@@ -61,7 +50,10 @@ export const hyper = /*#__PURE__*/ defineChain({
   },
 });
 
-export const createWagmiConfig = (config: RpcConfig, options?: WagmiOptions) => {
+export const createWagmiConfig = (
+  evmChains: EvmTypeConfig['chains'],
+  options?: WagmiOptions & { connectors?: CreateConnectorFn[] },
+): Config => {
   return createConfig({
     chains: [
       mainnet,
@@ -77,20 +69,21 @@ export const createWagmiConfig = (config: RpcConfig, options?: WagmiOptions) => 
       kaia,
       redbellyMainnet,
     ],
+    connectors: options?.connectors ?? [],
     ssr: options?.ssr,
     transports: {
-      [mainnet.id]: http(config[ETHEREUM_MAINNET_CHAIN_ID]),
-      [avalanche.id]: http(config[AVALANCHE_MAINNET_CHAIN_ID]),
-      [arbitrum.id]: http(config[ARBITRUM_MAINNET_CHAIN_ID]),
-      [base.id]: http(config[BASE_MAINNET_CHAIN_ID]),
-      [bsc.id]: http(config[BSC_MAINNET_CHAIN_ID]),
-      [sonic.id]: http(config[SONIC_MAINNET_CHAIN_ID]),
-      [optimism.id]: http(config[OPTIMISM_MAINNET_CHAIN_ID]),
-      [polygon.id]: http(config[POLYGON_MAINNET_CHAIN_ID]),
-      [hyper.id]: http(config[HYPEREVM_MAINNET_CHAIN_ID]),
-      [lightlinkPhoenix.id]: http(config[LIGHTLINK_MAINNET_CHAIN_ID]),
-      [redbellyMainnet.id]: http(config[REDBELLY_MAINNET_CHAIN_ID]),
-      [kaia.id]: http(config[KAIA_MAINNET_CHAIN_ID]),
+      [mainnet.id]: http(getRpcUrl(evmChains?.[ChainKeys.ETHEREUM_MAINNET])),
+      [avalanche.id]: http(getRpcUrl(evmChains?.[ChainKeys.AVALANCHE_MAINNET])),
+      [arbitrum.id]: http(getRpcUrl(evmChains?.[ChainKeys.ARBITRUM_MAINNET])),
+      [base.id]: http(getRpcUrl(evmChains?.[ChainKeys.BASE_MAINNET])),
+      [bsc.id]: http(getRpcUrl(evmChains?.[ChainKeys.BSC_MAINNET])),
+      [sonic.id]: http(getRpcUrl(evmChains?.[ChainKeys.SONIC_MAINNET])),
+      [optimism.id]: http(getRpcUrl(evmChains?.[ChainKeys.OPTIMISM_MAINNET])),
+      [polygon.id]: http(getRpcUrl(evmChains?.[ChainKeys.POLYGON_MAINNET])),
+      [hyper.id]: http(getRpcUrl(evmChains?.[ChainKeys.HYPEREVM_MAINNET])),
+      [lightlinkPhoenix.id]: http(getRpcUrl(evmChains?.[ChainKeys.LIGHTLINK_MAINNET])),
+      [redbellyMainnet.id]: http(getRpcUrl(evmChains?.[ChainKeys.REDBELLY_MAINNET])),
+      [kaia.id]: http(getRpcUrl(evmChains?.[ChainKeys.KAIA_MAINNET])),
     },
     storage: createStorage({
       storage: cookieStorage,
@@ -110,10 +103,6 @@ export class EvmXService extends XService {
 
   private constructor() {
     super('EVM');
-  }
-
-  getXConnectors() {
-    return [];
   }
 
   public static getInstance(): EvmXService {
@@ -144,11 +133,11 @@ export class EvmXService extends XService {
     return balance || 0n;
   }
 
-  async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
+  override async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
     if (!address) return 0n;
     if (!this.wagmiConfig) return 0n;
 
-    const chainId = getWagmiChainId(xToken.xChainId);
+    const chainId = getWagmiChainId(xToken.chainKey);
 
     if (isNativeToken(xToken)) {
       return this._getChainBalance(address, chainId);
@@ -157,7 +146,7 @@ export class EvmXService extends XService {
     throw new Error(`Unsupported token: ${xToken.symbol}`);
   }
 
-  async getBalances(address: string | undefined, xTokens: XToken[]) {
+  override async getBalances(address: string | undefined, xTokens: XToken[]) {
     if (!address) return {};
     if (!this.wagmiConfig) return {};
 
@@ -169,15 +158,20 @@ export class EvmXService extends XService {
       });
 
     const nativeTokenBalances = await Promise.all(nativeTokenBalancePromises);
-    const tokenMap = nativeTokenBalances.reduce((map, { address, balance }) => {
-      if (balance) map[address] = balance;
-      return map;
-    }, {});
+    const tokenMap: Record<string, bigint> = nativeTokenBalances.reduce<Record<string, bigint>>(
+      (map, { address, balance }) => {
+        if (balance) map[address] = balance;
+        return map;
+      },
+      {},
+    );
 
     const nonNativeXTokens = xTokens.filter(xToken => !isNativeToken(xToken));
-    const xChainId = xTokens[0].xChainId;
-    const viemChain: Chain = this.wagmiConfig.chains.find(chain => chain.id === getWagmiChainId(xChainId)) as Chain;
-    const chainId = getWagmiChainId(xChainId);
+    const firstToken = xTokens[0];
+    if (!firstToken) return tokenMap;
+    const chainKey = firstToken.chainKey;
+    const viemChain: Chain = this.wagmiConfig.chains.find(chain => chain.id === getWagmiChainId(chainKey)) as Chain;
+    const chainId = getWagmiChainId(chainKey);
 
     const publicClient = getPublicClient(this.wagmiConfig, { chainId: chainId });
     if (!publicClient) throw new Error('Public client not found');
@@ -194,7 +188,8 @@ export class EvmXService extends XService {
       });
 
       return nonNativeXTokens.reduce((acc, token, index) => {
-        acc[token.address] = result?.[index]?.result?.toString() || '0';
+        const resultValue = result?.[index]?.result;
+        acc[token.address] = resultValue !== undefined && resultValue !== null ? BigInt(resultValue) : 0n;
         return acc;
       }, tokenMap);
     }
@@ -204,7 +199,7 @@ export class EvmXService extends XService {
     );
 
     return nonNativeXTokens.reduce((acc, token, idx) => {
-      acc[token.address] = nonNativeTokenBalances[idx] || '0';
+      acc[token.address] = nonNativeTokenBalances[idx] ?? 0n;
       return acc;
     }, tokenMap);
   }

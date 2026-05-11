@@ -1,16 +1,25 @@
-import { XService } from '@/core/XService';
+import { XService } from '@/core/XService.js';
 import type { XToken } from '@sodax/types';
 import { NearConnector } from '@hot-labs/near-connect';
 import { JsonRpcProvider } from 'near-api-js';
+import { NEAR_DEFAULT_RPC_URL } from '@/constants.js';
 
 export class NearXService extends XService {
   private static instance: NearXService;
 
   public walletSelector: NearConnector;
+  public rpcUrl: string;
 
-  private constructor() {
+  /**
+   * @param rpcUrl - Used by `getBalance` via `JsonRpcProvider({ url: rpcUrl })`.
+   *   Does NOT affect `walletSelector` — `@hot-labs/near-connect` only accepts
+   *   the network preset name (`'mainnet'`/`'testnet'`) and fetches RPC internally.
+   *   Custom RPC is therefore read-only for balance queries.
+   */
+  private constructor(rpcUrl: string = NEAR_DEFAULT_RPC_URL) {
     super('NEAR');
 
+    this.rpcUrl = rpcUrl;
     this.walletSelector = new NearConnector({
       network: 'mainnet',
       logger: console,
@@ -19,17 +28,23 @@ export class NearXService extends XService {
     });
   }
 
-  public static getInstance(): NearXService {
+  /**
+   * @param rpcUrl - Re-applied on every call (matches StacksXService semantics).
+   *   `rpcUrl` only drives `getBalance` via a per-call `JsonRpcProvider`, so it's
+   *   safe to update at runtime — no persistent chain client to rebuild.
+   */
+  public static getInstance(rpcUrl?: string): NearXService {
     if (!NearXService.instance) {
-      NearXService.instance = new NearXService();
+      NearXService.instance = new NearXService(rpcUrl);
+    } else if (rpcUrl) {
+      NearXService.instance.rpcUrl = rpcUrl;
     }
     return NearXService.instance;
   }
 
-  async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
-    const url = 'https://1rpc.io/near';
+  override async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
     // reference: https://near.github.io/near-api-js/classes/_near-js_providers.json-rpc-provider.JsonRpcProvider.html
-    const provider = new JsonRpcProvider({ url });
+    const provider = new JsonRpcProvider({ url: this.rpcUrl });
 
     // get native balance
     if (xToken.symbol === 'NEAR') {
@@ -40,7 +55,11 @@ export class NearXService extends XService {
     // Near Fungible Token Standard(https://github.com/near/NEPs/blob/master/neps/nep-0141.md)
     // get balance of the token
 
-    const res = await provider.callFunction<number>({ contractId: xToken.address, method: 'ft_balance_of', args: { account_id: address } });
+    const res = await provider.callFunction<number>({
+      contractId: xToken.address,
+      method: 'ft_balance_of',
+      args: { account_id: address },
+    });
     return BigInt(res ?? 0);
   }
 }

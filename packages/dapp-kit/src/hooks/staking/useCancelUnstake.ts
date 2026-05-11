@@ -1,52 +1,41 @@
 // packages/dapp-kit/src/hooks/staking/useCancelUnstake.ts
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { CancelUnstakeParams, SpokeProvider, SpokeTxHash, HubTxHash } from '@sodax/sdk';
+import type { CancelUnstakeAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
+
+export type UseCancelUnstakeVars<K extends SpokeChainKey = SpokeChainKey> = Omit<CancelUnstakeAction<K, false>, 'raw'>;
 
 /**
- * Hook for executing cancel unstake transactions to cancel pending unstake requests.
- * Uses React Query's useMutation for better state management and caching.
+ * React hook for cancelling a pending unstake request.
  *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the cancel unstake
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<CancelUnstakeParams, 'action'>>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: cancelUnstake, isPending } = useCancelUnstake(spokeProvider);
- *
- * const handleCancelUnstake = async () => {
- *   const result = await cancelUnstake({
- *     requestId: 1n
- *   });
- *
- *   console.log('Cancel unstake successful:', result);
- * };
- * ```
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useCancelUnstake(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<CancelUnstakeParams, 'action'>> {
+export function useCancelUnstake<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseCancelUnstakeVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseCancelUnstakeVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async (params: Omit<CancelUnstakeParams, 'action'>) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not available');
-      }
-
-      const result = await sodax.staking.cancelUnstake({ ...params, action: 'cancelUnstake' }, spokeProvider);
-      if (!result.ok) {
-        throw new Error(`Cancel unstake failed: ${result.error.code}`);
-      }
-
-      return result.value;
-    },
-    onSuccess: () => {
-      // Invalidate relevant queries to refresh data
-      queryClient.invalidateQueries({ queryKey: ['stakingInfo'] });
-      queryClient.invalidateQueries({ queryKey: ['unstakingInfo'] });
-      queryClient.invalidateQueries({ queryKey: ['unstakingInfoWithPenalty'] });
+  return useSafeMutation<TxHashPair, Error, UseCancelUnstakeVars<K>>({
+    mutationKey: ['staking', 'cancelUnstake'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.staking.cancelUnstake({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['staking', 'unstakingInfo', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['staking', 'unstakingInfoWithPenalty', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'info', params.srcChainKey, params.srcAddress] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

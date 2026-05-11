@@ -3,10 +3,11 @@
   "license": "MIT",
   "version": "0.0.1-rc.4",
   "description": "dapp-kit of New World",
-  "main": "dist/index.js",
+  "type": "module",
+  "main": "dist/index.cjs",
   "types": "dist/index.d.ts",
   "module": "dist/index.mjs",
-  "files": ["dist", "src"],
+  "files": ["dist", "src", "skills"],
   "repository": {
     "type": "git",
     "url": "https://github.com/icon-project/sodax-frontend"
@@ -14,7 +15,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch ./src",
-    "test": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "tsup",
     "clean": "rm -rf dist && rm -rf node_modules && rm -rf .turbo",
     "pretty": "biome format . --write",
@@ -24,14 +25,15 @@
   },
   "dependencies": {
     "@sodax/sdk": "workspace:*",
-    "@sodax/types": "workspace:*",
     "viem": "catalog:"
   },
   "devDependencies": {
+    "@tanstack/react-query": "catalog:",
     "@types/react": "catalog:",
     "knip": "5.30.5",
     "tsup": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "@tanstack/react-query": "5.x",
@@ -45,7 +47,7 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "require": "./dist/index.cjs"
     }
   }
 }

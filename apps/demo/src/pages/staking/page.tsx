@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { SelectChain } from '@/components/solver/SelectChain';
+import { SelectChain } from '@/components/swaps/SelectChain';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -12,8 +12,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { spokeChainConfig } from '@sodax/sdk';
-import type { XToken } from '@sodax/types';
 import {
   getXChainType,
   useEvmSwitchChain,
@@ -25,7 +23,6 @@ import { useAppStore } from '@/zustand/useAppStore';
 import { ArrowDownUp, ArrowLeftRight, Coins, TrendingUp } from 'lucide-react';
 import { scaleTokenAmount, formatTokenAmount } from '@/lib/utils';
 import {
-  useSpokeProvider,
   useStake,
   useStakeApprove,
   useStakeAllowance,
@@ -58,93 +55,90 @@ export default function StakingPage() {
   const [minUnstakeAmount, setMinUnstakeAmount] = useState<string>('');
   const [minStakeReceive, setMinStakeReceive] = useState<string>('');
 
-  const account = useXAccount(selectedChainId);
-  const walletProvider = useWalletProvider(selectedChainId);
-  console.log('selected chain id:', selectedChainId);
-  console.log('wallet provider:', walletProvider);
-  const spokeProvider = useSpokeProvider(selectedChainId, walletProvider);
-  const supportedSpokeChains = sodax.config.getSupportedSpokeChains();
-  const { data: walletAddressOnHub } = useGetUserHubWalletAddress(selectedChainId, account?.address);
+  const account = useXAccount({ xChainId: selectedChainId });
+  const walletProvider = useWalletProvider({ xChainId: selectedChainId });
+  const srcAddress = account?.address as `0x${string}` | undefined;
+  const supportedSpokeChains = useMemo(() => sodax.config.getSupportedSpokeChains(), [sodax]);
+  const { data: walletAddressOnHub } = useGetUserHubWalletAddress({
+    params: { spokeChainId: selectedChainId, spokeAddress: account?.address },
+  });
 
-  // Staking info hooks
-  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain(selectedChainId);
+  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain({ xChainId: selectedChainId });
 
-  // Dialog states
   const [stakeDialogOpen, setStakeDialogOpen] = useState(false);
   const [unstakeDialogOpen, setUnstakeDialogOpen] = useState(false);
   const [instantUnstakeDialogOpen, setInstantUnstakeDialogOpen] = useState(false);
 
-  // SODA token for the selected chain
-  const sodaToken = useMemo(() => {
-    const chainConfig = spokeChainConfig[selectedChainId];
-    return (chainConfig?.supportedTokens as unknown as Record<string, XToken>)?.SODA || null;
-  }, [selectedChainId]);
-
-  // SODA balance for the connected wallet
-  const { data: sodaBalance, isLoading: isLoadingSodaBalance } = useSodaBalance(
-    selectedChainId,
-    account.address,
-    spokeProvider,
+  const sodaToken = useMemo(
+    () => sodax.config.findSupportedTokenBySymbol(selectedChainId, 'SODA') ?? null,
+    [sodax, selectedChainId],
   );
 
-  // Staking hooks
-  const { mutateAsync: stake, isPending: isStakingPending } = useStake(spokeProvider);
-  const { mutateAsync: approveStake, isPending: isApprovingStake } = useStakeApprove(spokeProvider);
-  const { mutateAsync: approveUnstake, isPending: isApprovingUnstake } = useUnstakeApprove(spokeProvider);
-  const { mutateAsync: approveInstantUnstake, isPending: isApprovingInstantUnstake } =
-    useInstantUnstakeApprove(spokeProvider);
-  const { mutateAsync: unstake, isPending: isUnstakingPending } = useUnstake(spokeProvider);
-  const { data: isStakeAllowed, isLoading: isStakeAllowanceLoading } = useStakeAllowance(
-    stakeAmount && sodaToken && account.address
-      ? {
-          amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
-          account: account.address as `0x${string}`,
-          minReceive: scaleTokenAmount(stakeAmount, sodaToken.decimals), // expect same amount, change to enable slippage
-        }
-      : undefined,
-    spokeProvider,
-  );
-  const { data: isUnstakeAllowed, isLoading: isUnstakeAllowanceLoading } = useUnstakeAllowance(
-    unstakeAmount && sodaToken && account.address
-      ? {
-          amount: scaleTokenAmount(unstakeAmount, 18),
-          account: account.address as `0x${string}`,
-        }
-      : undefined,
-    spokeProvider,
-  );
-  const { data: isInstantUnstakeAllowed, isLoading: isInstantUnstakeAllowanceLoading } = useInstantUnstakeAllowance(
-    unstakeAmount && sodaToken && account.address
-      ? {
-          amount: scaleTokenAmount(unstakeAmount, 18), // xSoda has 18 decimals
-          minAmount: scaleTokenAmount(minUnstakeAmount, 18),
-          account: account.address as `0x${string}`,
-        }
-      : undefined,
-    spokeProvider,
-  );
+  const sodaBalance = useSodaBalance(selectedChainId, account?.address);
+  const isLoadingSodaBalance = sodaBalance === undefined;
 
-  // Stake ratio estimation
+  const { mutateAsync: stake, isPending: isStakingPending } = useStake();
+  const { mutateAsync: approveStake, isPending: isApprovingStake } = useStakeApprove();
+  const { mutateAsync: approveUnstake, isPending: isApprovingUnstake } = useUnstakeApprove();
+  const { mutateAsync: approveInstantUnstake, isPending: isApprovingInstantUnstake } = useInstantUnstakeApprove();
+  const { mutateAsync: unstake, isPending: isUnstakingPending } = useUnstake();
+
+  const { data: isStakeAllowed, isLoading: isStakeAllowanceLoading } = useStakeAllowance({
+    params: {
+      payload:
+        stakeAmount && sodaToken && srcAddress
+          ? {
+              srcChainKey: selectedChainId,
+              srcAddress,
+              amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
+              minReceive: scaleTokenAmount(stakeAmount, sodaToken.decimals),
+            }
+          : undefined,
+    },
+  });
+
+  const { data: isUnstakeAllowed, isLoading: isUnstakeAllowanceLoading } = useUnstakeAllowance({
+    params: {
+      payload:
+        unstakeAmount && sodaToken && srcAddress
+          ? {
+              srcChainKey: selectedChainId,
+              srcAddress,
+              amount: scaleTokenAmount(unstakeAmount, 18),
+            }
+          : undefined,
+    },
+  });
+
+  const { data: isInstantUnstakeAllowed, isLoading: isInstantUnstakeAllowanceLoading } = useInstantUnstakeAllowance({
+    params: {
+      payload:
+        unstakeAmount && sodaToken && srcAddress
+          ? {
+              srcChainKey: selectedChainId,
+              srcAddress,
+              amount: scaleTokenAmount(unstakeAmount, 18),
+              minAmount: scaleTokenAmount(minUnstakeAmount || '0', 18),
+            }
+          : undefined,
+    },
+  });
+
   const scaledStakeAmount = stakeAmount && sodaToken ? scaleTokenAmount(stakeAmount, sodaToken.decimals) : undefined;
-  const { data: stakeRatio, isLoading: isLoadingStakeRatio, error: stakeRatioError } = useStakeRatio(scaledStakeAmount);
+  const { data: stakeRatio, isLoading: isLoadingStakeRatio } = useStakeRatio({
+    params: { amount: scaledStakeAmount },
+  });
 
-  // Instant unstake ratio estimation
-  const scaledUnstakeAmount = unstakeAmount ? scaleTokenAmount(unstakeAmount, 18) : undefined; // xSoda has 18 decimals
-  const {
-    data: instantUnstakeRatio,
-    isLoading: isLoadingInstantUnstakeRatio,
-    error: instantUnstakeRatioError,
-  } = useInstantUnstakeRatio(scaledUnstakeAmount);
+  const scaledUnstakeAmount = unstakeAmount ? scaleTokenAmount(unstakeAmount, 18) : undefined;
+  const { data: instantUnstakeRatio, isLoading: isLoadingInstantUnstakeRatio } = useInstantUnstakeRatio({
+    params: { amount: scaledUnstakeAmount },
+  });
 
-  // Converted assets estimation (what you get if you convert xSODA to SODA)
-  const {
-    data: convertedAssets,
-    isLoading: isLoadingConvertedAssets,
-    error: convertedAssetsError,
-  } = useConvertedAssets(scaledUnstakeAmount);
+  const { data: convertedAssets, isLoading: isLoadingConvertedAssets } = useConvertedAssets({
+    params: { amount: scaledUnstakeAmount },
+  });
 
-  // Instant unstake mutation
-  const { mutateAsync: instantUnstake, isPending: isInstantUnstakingPending } = useInstantUnstake(spokeProvider);
+  const { mutateAsync: instantUnstake, isPending: isInstantUnstakingPending } = useInstantUnstake();
 
   // Auto-calculate minUnstakeAmount as 95% of instantUnstakeRatio
   useEffect(() => {
@@ -166,73 +160,69 @@ export default function StakingPage() {
     }
   }, [stakeRatio]);
 
-  // Debug logging
-  console.log('Debug staking estimates:', {
-    stakeAmount,
-    scaledStakeAmount: scaledStakeAmount?.toString(),
-    unstakeAmount,
-    scaledUnstakeAmount: scaledUnstakeAmount?.toString(),
-    stakeRatio,
-    instantUnstakeRatio,
-    convertedAssets,
-    stakeRatioError,
-    instantUnstakeRatioError,
-    convertedAssetsError,
-  });
-
-  const handleApproveStake = async () => {
-    if (!account.address || !sodaToken || !stakeAmount) return;
-
+  const handleApproveStake = async (): Promise<void> => {
+    if (!srcAddress || !sodaToken || !stakeAmount || !walletProvider) return;
     try {
       await approveStake({
-        amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
-        account: account.address as `0x${string}`,
-        minReceive: scaleTokenAmount(minStakeReceive, 18), // expect same amount, change to enable slippage
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
+          minReceive: scaleTokenAmount(minStakeReceive || stakeAmount, 18),
+        },
+        walletProvider,
       });
     } catch (error) {
-      console.error('Approve error:', error);
+      console.error('Approve stake error:', error);
     }
   };
 
-  const handleApproveUnstake = async () => {
-    if (!account.address || !sodaToken || !unstakeAmount) return;
-
+  const handleApproveUnstake = async (): Promise<void> => {
+    if (!srcAddress || !sodaToken || !unstakeAmount || !walletProvider) return;
     try {
       await approveUnstake({
-        amount: scaleTokenAmount(unstakeAmount, 18),
-        account: account.address as `0x${string}`,
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(unstakeAmount, 18),
+        },
+        walletProvider,
       });
     } catch (error) {
       console.error('Approve unstake error:', error);
     }
   };
 
-  const handleApproveInstantUnstake = async () => {
-    if (!account.address || !sodaToken || !unstakeAmount) return;
-
+  const handleApproveInstantUnstake = async (): Promise<void> => {
+    if (!srcAddress || !sodaToken || !unstakeAmount || !walletProvider) return;
     try {
       await approveInstantUnstake({
-        amount: scaleTokenAmount(unstakeAmount, 18), // xSoda has 18 decimals
-        minAmount: scaleTokenAmount(minUnstakeAmount, 18),
-        account: account.address as `0x${string}`,
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(unstakeAmount, 18),
+          minAmount: scaleTokenAmount(minUnstakeAmount, 18),
+        },
+        walletProvider,
       });
     } catch (error) {
-      console.error('Approve unstake error:', error);
+      console.error('Approve instant unstake error:', error);
     }
   };
 
-  const handleStake = async () => {
-    if (!account.address || !sodaToken || !stakeAmount || !minStakeReceive) return;
-
+  const handleStake = async (): Promise<void> => {
+    if (!srcAddress || !sodaToken || !stakeAmount || !minStakeReceive || !walletProvider) return;
     try {
       await stake({
-        amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
-        minReceive: scaleTokenAmount(minStakeReceive, 18),
-        account: account.address as `0x${string}`,
-        action: 'stake',
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(stakeAmount, sodaToken.decimals),
+          minReceive: scaleTokenAmount(minStakeReceive, 18),
+          action: 'stake',
+        },
+        walletProvider,
       });
-
-      console.log('Stake successful');
       setStakeDialogOpen(false);
       setStakeAmount('');
       setMinStakeReceive('');
@@ -241,16 +231,18 @@ export default function StakingPage() {
     }
   };
 
-  const handleUnstake = async () => {
-    if (!account.address || !unstakeAmount) return;
-
+  const handleUnstake = async (): Promise<void> => {
+    if (!srcAddress || !unstakeAmount || !walletProvider) return;
     try {
       await unstake({
-        amount: scaleTokenAmount(unstakeAmount, 18), // xSoda has 18 decimals
-        account: account.address as `0x${string}`,
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(unstakeAmount, 18),
+          action: 'unstake',
+        },
+        walletProvider,
       });
-
-      console.log('Unstake successful');
       setUnstakeDialogOpen(false);
       setUnstakeAmount('');
     } catch (error) {
@@ -258,22 +250,19 @@ export default function StakingPage() {
     }
   };
 
-  const handleInstantUnstake = async () => {
-    if (!account.address || !unstakeAmount || !minUnstakeAmount) {
-      console.log(
-        `Instant unstake failed: missing required fields: account.address=${account.address}, unstakeAmount=${unstakeAmount}, minUnstakeAmount=${minUnstakeAmount}`,
-      );
-      return;
-    }
-
+  const handleInstantUnstake = async (): Promise<void> => {
+    if (!srcAddress || !unstakeAmount || !minUnstakeAmount || !walletProvider) return;
     try {
-      const [hubTxHash, spokeTxHash] = await instantUnstake({
-        amount: scaleTokenAmount(unstakeAmount, 18), // xSoda has 18 decimals
-        minAmount: scaleTokenAmount(minUnstakeAmount, 18),
-        account: account.address as `0x${string}`,
+      await instantUnstake({
+        params: {
+          srcChainKey: selectedChainId,
+          srcAddress,
+          amount: scaleTokenAmount(unstakeAmount, 18),
+          minAmount: scaleTokenAmount(minUnstakeAmount, 18),
+          action: 'instantUnstake',
+        },
+        walletProvider,
       });
-
-      console.log('Instant unstake successful:', { hubTxHash, spokeTxHash });
       setInstantUnstakeDialogOpen(false);
       setUnstakeAmount('');
       setMinUnstakeAmount('');
@@ -283,10 +272,10 @@ export default function StakingPage() {
   };
 
   const disconnect = useXDisconnect();
-  const handleDisconnect = () => {
+  const handleDisconnect = (): void => {
     const chainType = getXChainType(selectedChainId);
     if (chainType) {
-      disconnect(chainType);
+      disconnect({ xChainType: chainType });
     }
   };
 
@@ -300,7 +289,6 @@ export default function StakingPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Chain Selection */}
           <div className="space-y-2">
             <Label>Select Chain</Label>
             <SelectChain
@@ -313,7 +301,6 @@ export default function StakingPage() {
             />
           </div>
 
-          {/* Account Connection */}
           <div className="space-y-2">
             <Label>Account</Label>
             <div className="flex items-center gap-2">
@@ -342,28 +329,18 @@ export default function StakingPage() {
             </div>
           )}
 
-          {/* SODA Balance */}
-          {account.address && sodaToken && spokeProvider && (
-            <SodaBalance
-              selectedChainId={selectedChainId}
-              account={account}
-              spokeProvider={spokeProvider}
-              sodaToken={sodaToken}
-            />
+          {account.address && sodaToken && (
+            <SodaBalance selectedChainId={selectedChainId} account={account} sodaToken={sodaToken} />
           )}
 
-          {/* Staking Configuration */}
           <StakingConfiguration />
 
-          {/* Staking Info */}
-          {account.address && spokeProvider && <StakingInfo spokeProvider={spokeProvider} />}
+          {srcAddress && <StakingInfo srcAddress={srcAddress} srcChainKey={selectedChainId} />}
 
-          {/* Unstaking Info */}
-          {account.address && spokeProvider && (
-            <UnstakingInfo spokeProvider={spokeProvider} userAddress={account.address} />
+          {srcAddress && walletProvider && (
+            <UnstakingInfo srcChainKey={selectedChainId} srcAddress={srcAddress} walletProvider={walletProvider} />
           )}
 
-          {/* Action Tabs */}
           {account.address && (
             <Tabs defaultValue="stake" className="w-full">
               <TabsList className="grid w-full grid-cols-2">
@@ -403,7 +380,6 @@ export default function StakingPage() {
                   )}
                 </div>
 
-                {/* Stake Estimates */}
                 {stakeAmount && sodaToken && (
                   <div className="p-4 border rounded-lg bg-muted/50">
                     <div className="text-sm text-muted-foreground mb-2">Stake Estimates</div>
@@ -465,7 +441,6 @@ export default function StakingPage() {
                   </div>
                 </div>
 
-                {/* Instant Unstake Estimates */}
                 {unstakeAmount && (
                   <div className="p-4 border rounded-lg bg-muted/50">
                     <div className="text-sm text-muted-foreground mb-2">Instant Unstake Estimate</div>
@@ -550,7 +525,7 @@ export default function StakingPage() {
                 {isLoadingSodaBalance ? (
                   <Skeleton className="h-6 w-20" />
                 ) : (
-                  `${formatTokenAmount(sodaBalance || 0n, sodaToken?.decimals || 18)} ${sodaToken?.symbol || 'SODA'}`
+                  `${formatTokenAmount(sodaBalance ?? 0n, sodaToken?.decimals ?? 18)} ${sodaToken?.symbol ?? 'SODA'}`
                 )}
               </div>
             </div>
@@ -632,13 +607,13 @@ export default function StakingPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
       {/* Instant Unstake Dialog */}
       <Dialog open={instantUnstakeDialogOpen} onOpenChange={setInstantUnstakeDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Instant Unstake xSODA</DialogTitle>
             <DialogDescription>
-              {' '}
               InstantUnstake {unstakeAmount} xSODA shares to initiate unstaking process
             </DialogDescription>
           </DialogHeader>
@@ -653,10 +628,10 @@ export default function StakingPage() {
               onClick={handleApproveInstantUnstake}
               disabled={isInstantUnstakeAllowanceLoading || isInstantUnstakeAllowed || isApprovingInstantUnstake}
             >
-              {isApprovingUnstake ? 'Approving...' : isInstantUnstakeAllowed ? 'Approved' : 'Approve'}
+              {isApprovingInstantUnstake ? 'Approving...' : isInstantUnstakeAllowed ? 'Approved' : 'Approve'}
             </Button>
             <Button onClick={handleInstantUnstake} disabled={isInstantUnstakingPending || !isInstantUnstakeAllowed}>
-              {isUnstakingPending ? 'Unstaking...' : 'Confirm Unstake'}
+              {isInstantUnstakingPending ? 'Unstaking...' : 'Confirm Unstake'}
             </Button>
           </DialogFooter>
         </DialogContent>

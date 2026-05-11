@@ -1,10 +1,11 @@
 import React from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { useRadfiSession, useTradingWalletBalance, useFundTradingWallet, useExpiredUtxos, useRenewUtxos, useRadfiWithdraw } from '@sodax/dapp-kit';
-import { useXConnection, useXConnectors, useXConnect, useXDisconnect, XverseXConnector, type BtcWalletAddressType } from '@sodax/wallet-sdk-react';
-import type { BitcoinSpokeProvider } from '@sodax/sdk';
-import { detectBitcoinAddressType } from '@sodax/types';
+import { useRadfiSession, useTradingWalletBalance, useFundTradingWallet, useExpiredUtxos, useRenewUtxos, useRadfiWithdraw, useSodaxContext } from '@sodax/dapp-kit';
+import { useXConnection, useXConnectors, useXConnect, useXDisconnect } from '@sodax/wallet-sdk-react';
+import { XverseXConnector } from '@sodax/wallet-sdk-react/xchains/bitcoin';
+import type { BtcWalletAddressType, IBitcoinWalletProvider } from '@sodax/sdk';
+import { detectBitcoinAddressType } from '@sodax/sdk';
 import { formatUnits } from 'viem';
 import { Loader2, Copy, ExternalLink, Check, AlertTriangle, RefreshCw } from 'lucide-react';
 import { FundTradingWalletDialog } from './FundTradingWalletDialog';
@@ -12,7 +13,7 @@ import { WithdrawTradingWalletDialog } from './WithdrawTradingWalletDialog';
 import { loadRadfiSession } from '@sodax/dapp-kit';
 
 interface BitcoinSetupPanelProps {
-  spokeProvider: BitcoinSpokeProvider;
+  walletProvider: IBitcoinWalletProvider;
   onReadyChange: (isReady: boolean) => void;
   nativeBalance?: bigint;
   isNativeBalanceLoading?: boolean;
@@ -24,23 +25,32 @@ interface BitcoinSetupPanelProps {
 
 type BtcAddressType = BtcWalletAddressType;
 
-export const BitcoinSetupPanel = ({ spokeProvider, onReadyChange, nativeBalance, isNativeBalanceLoading, connectorName = 'Wallet', connectorIcon = '', isDestination = false }: BitcoinSetupPanelProps) => {
-  const { walletAddress, isAuthed, tradingAddress, login, isLoginPending } = useRadfiSession(spokeProvider);
+export const BitcoinSetupPanel = ({ walletProvider, onReadyChange, nativeBalance, isNativeBalanceLoading, connectorName = 'Wallet', connectorIcon = '', isDestination = false }: BitcoinSetupPanelProps) => {
+  const { sodax } = useSodaxContext();
+  const { walletAddress, isAuthed, tradingAddress, login, isLoginPending } = useRadfiSession(walletProvider);
 
-  const { data: tradingBalance, isLoading: isBalanceLoading } = useTradingWalletBalance(spokeProvider, tradingAddress);
+  const { data: tradingBalance, isLoading: isBalanceLoading } = useTradingWalletBalance({
+    params: { walletProvider, tradingAddress },
+  });
 
-  const { mutateAsync: fundWallet, isPending: isFunding } = useFundTradingWallet(spokeProvider);
-  const { data: expiredUtxos, isLoading: isExpiredLoading } = useExpiredUtxos(spokeProvider, tradingAddress);
-  const { mutateAsync: renewUtxos, isPending: isRenewing } = useRenewUtxos(spokeProvider);
-  const { mutateAsync: withdrawFromTradingWallet, isPending: isWithdrawing } = useRadfiWithdraw(spokeProvider);
+  // Both dialogs (FundTradingWalletDialog, WithdrawTradingWalletDialog) wrap their `onFund` /
+  // `onWithdraw` callbacks in their own try/catch — using `mutateAsync` here lets the dialog's
+  // existing throw-aware contract work directly without a redundant Result→throw bounce.
+  const { mutateAsync: fundWallet, isPending: isFunding } = useFundTradingWallet();
+  const { data: expiredUtxos, isLoading: isExpiredLoading } = useExpiredUtxos({
+    params: { walletProvider, tradingAddress },
+  });
+  // `mutateAsyncSafe` here because handleRenewUtxos branches on `.ok` to populate inline error state.
+  const { mutateAsyncSafe: renewUtxos, isPending: isRenewing } = useRenewUtxos();
+  const { mutateAsync: withdrawFromTradingWallet, isPending: isWithdrawing } = useRadfiWithdraw();
   const [copied, setCopied] = useState(false);
   const [renewError, setRenewError] = useState<string | null>(null);
   const [showFundDialog, setShowFundDialog] = useState(false);
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
 
   // Address type selector (Xverse only)
-  const xConnection = useXConnection('BITCOIN');
-  const xConnectors = useXConnectors('BITCOIN');
+  const xConnection = useXConnection({ xChainType: 'BITCOIN' });
+  const xConnectors = useXConnectors({ xChainType: 'BITCOIN' });
   const { mutateAsync: xConnect } = useXConnect();
   const xDisconnect = useXDisconnect();
   const [isSwitching, setIsSwitching] = useState(false);
@@ -58,7 +68,7 @@ export const BitcoinSetupPanel = ({ spokeProvider, onReadyChange, nativeBalance,
     try {
       const xverseConnector = activeConnector as XverseXConnector;
       xverseConnector.setAddressPurpose(newType);
-      xDisconnect('BITCOIN');
+      xDisconnect({ xChainType: 'BITCOIN' });
       await xConnect(xverseConnector);
     } catch (e) {
       console.error('Failed to switch address type', e);
@@ -87,28 +97,27 @@ export const BitcoinSetupPanel = ({ spokeProvider, onReadyChange, nativeBalance,
   }, [isAuthed, tradingAddress, tradingBalance, expiredUtxos, isDestination, onReadyChange]);
 
   const handleFetchMax = useCallback(async (withdrawTo: string) => {
-    if (!spokeProvider || !walletAddress) return undefined;
+    if (!walletProvider || !walletAddress) return undefined;
     const session = loadRadfiSession(walletAddress);
     const accessToken = session?.accessToken;
     if (!accessToken) return undefined;
     const balance = tradingBalance?.btcSatoshi ?? 0n;
     if (balance <= 0n) return undefined;
-    return spokeProvider.radfi.getMaxWithdrawable(
+    return sodax.spokeService.bitcoinSpokeService.radfi.getMaxWithdrawable(
       { userAddress: walletAddress, amount: balance.toString(), tokenId: '0:0', withdrawTo },
       accessToken,
     );
-  }, [spokeProvider, walletAddress, tradingBalance]);
+  }, [sodax, walletProvider, walletAddress, tradingBalance]);
 
   const handleRenewUtxos = async () => {
     if (!expiredUtxos?.length) return;
     setRenewError(null);
-    try {
-      const txIdVouts = expiredUtxos.map(u => u.txidVout ?? `${u.txid}:${u.vout}`);
-      await renewUtxos({ txIdVouts });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to renew UTXOs';
+    const txIdVouts = expiredUtxos.map(u => u.txidVout ?? `${u.txid}:${u.vout}`);
+    const result = await renewUtxos({ txIdVouts, walletProvider });
+    if (!result.ok) {
+      const msg = result.error instanceof Error ? result.error.message : 'Failed to renew UTXOs';
       setRenewError(msg);
-      console.error('Failed to renew UTXOs', e);
+      console.error('Failed to renew UTXOs', result.error);
     }
   };
 
@@ -230,7 +239,7 @@ export const BitcoinSetupPanel = ({ spokeProvider, onReadyChange, nativeBalance,
                   connectorName={connectorName}
                   connectorIcon={connectorIcon}
                   onFund={async (amount) => {
-                    await fundWallet(amount);
+                    await fundWallet({ amount, walletProvider });
                   }}
                   isFunding={isFunding}
                 />
@@ -246,7 +255,12 @@ export const BitcoinSetupPanel = ({ spokeProvider, onReadyChange, nativeBalance,
                   connectorName={connectorName}
                   connectorIcon={connectorIcon}
                   onWithdraw={async (amount, withdrawTo) => {
-                    return withdrawFromTradingWallet({ amount, tokenId: '0:0', withdrawTo });
+                    return withdrawFromTradingWallet({
+                      amount,
+                      tokenId: '0:0',
+                      withdrawTo,
+                      walletProvider,
+                    });
                   }}
                   isWithdrawing={isWithdrawing}
                   onFetchMax={handleFetchMax}

@@ -1,5 +1,5 @@
-import { createDecreaseLiquidityParamsProps } from '@/utils/dex-utils';
-import type { ClPositionInfo, ConcentratedLiquidityDecreaseLiquidityParams, PoolKey } from '@sodax/sdk';
+import { createDecreaseLiquidityParamsProps, type DecreaseLiquidityParamsCore } from '@/utils/dex-utils.js';
+import type { ClPositionInfo, PoolKey } from '@sodax/sdk';
 import { useMemo } from 'react';
 
 export type UseCreateDecreaseLiquidityParamsProps = {
@@ -10,23 +10,10 @@ export type UseCreateDecreaseLiquidityParamsProps = {
   slippageTolerance: string | number;
 };
 
-
 /**
- * React hook to create the decrease liquidity parameters for a given pool and position.
- *
- * Purpose:
- *   - Provides a hook which memoizes the decrease liquidity parameters for a given pool and position.
- *
- * Usage:
- *   - Call the function with the pool key, token ID, percentage, position info, and slippage tolerance to create the decrease liquidity parameters.
- *
- * Params:
- * @param poolKey - The pool key of the pool to decrease the liquidity from.
- * @param tokenId - The token ID of the position to decrease the liquidity from.
- * @param percentage - The percentage of liquidity to decrease.
- * @param positionInfo - The position info of the position to decrease the liquidity from.
- * @param slippageTolerance - The slippage tolerance to use for the decrease.
- * @returns The decrease liquidity parameters.
+ * React hook to memoize the decrease-liquidity-specific subset of {@link ClDecreaseLiquidityParams}
+ * (`{ poolKey, tokenId, liquidity, amount0Min, amount1Min }`). Callers add `srcChainKey` +
+ * `srcAddress` at the mutation call site.
  */
 export function useCreateDecreaseLiquidityParams({
   poolKey,
@@ -34,8 +21,8 @@ export function useCreateDecreaseLiquidityParams({
   percentage,
   positionInfo,
   slippageTolerance,
-}: UseCreateDecreaseLiquidityParamsProps): ConcentratedLiquidityDecreaseLiquidityParams {
-  return useMemo<ConcentratedLiquidityDecreaseLiquidityParams>(() => {
+}: UseCreateDecreaseLiquidityParamsProps): DecreaseLiquidityParamsCore {
+  return useMemo<DecreaseLiquidityParamsCore>(() => {
     return createDecreaseLiquidityParamsProps({ poolKey, tokenId, percentage, positionInfo, slippageTolerance });
   }, [poolKey, tokenId, percentage, positionInfo, slippageTolerance]);
 }

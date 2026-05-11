@@ -1,2 +1,2 @@
-export { AleoXService } from './AleoXService';
-export { AleoXConnector } from './AleoXConnector';
+export { AleoXService } from './AleoXService.js';
+export { AleoXConnector } from './AleoXConnector.js';

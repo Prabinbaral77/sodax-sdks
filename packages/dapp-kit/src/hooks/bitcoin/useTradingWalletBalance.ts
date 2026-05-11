@@ -1,22 +1,33 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import type { BitcoinSpokeProvider, RadfiWalletBalance } from '@sodax/sdk';
+import type { RadfiWalletBalance, IBitcoinWalletProvider } from '@sodax/sdk';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { ReadHookParams } from '../shared/types.js';
 
-/**
- * Hook to fetch trading wallet balance from Radfi API.
- * Returns confirmed + pending satoshi balances.
- */
-export function useTradingWalletBalance(
-  spokeProvider: BitcoinSpokeProvider | undefined,
-  tradingAddress: string | undefined,
-): UseQueryResult<RadfiWalletBalance, Error> {
+export type UseTradingWalletBalanceParams = ReadHookParams<
+  RadfiWalletBalance,
+  {
+    walletProvider: IBitcoinWalletProvider | undefined;
+    tradingAddress: string | undefined;
+  }
+>;
+
+export function useTradingWalletBalance({
+  params,
+  queryOptions,
+}: UseTradingWalletBalanceParams = {}): UseQueryResult<RadfiWalletBalance, Error> {
+  const { sodax } = useSodaxContext();
+  const walletProvider = params?.walletProvider;
+  const tradingAddress = params?.tradingAddress;
+
   return useQuery<RadfiWalletBalance, Error>({
-    queryKey: ['trading-wallet-balance', tradingAddress],
+    queryKey: ['bitcoin', 'tradingWalletBalance', tradingAddress],
     queryFn: () => {
-      if (!spokeProvider || !tradingAddress) {
-        throw new Error('spokeProvider and tradingAddress are required');
+      if (!walletProvider || !tradingAddress) {
+        throw new Error('walletProvider and tradingAddress are required');
       }
-      return spokeProvider.radfi.getBalance(tradingAddress);
+      return sodax.spokeService.bitcoinSpokeService.radfi.getBalance(tradingAddress);
     },
-    enabled: !!spokeProvider && !!tradingAddress,
+    enabled: !!walletProvider && !!tradingAddress,
+    ...queryOptions,
   });
 }

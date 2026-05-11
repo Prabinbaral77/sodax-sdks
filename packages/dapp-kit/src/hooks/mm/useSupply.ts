@@ -1,65 +1,59 @@
-import type { MoneyMarketError, MoneyMarketSupplyParams, RelayErrorCode, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
+// packages/dapp-kit/src/hooks/mm/useSupply.ts
+import type { MoneyMarketSupplyActionParams, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
-interface SupplyResponse {
-  ok: true;
-  value: [string, string];
-}
-
-export type UseSupplyParams = {
-  params: MoneyMarketSupplyParams;
-  spokeProvider: SpokeProvider;
-};
+/**
+ * Mutation variables for {@link useSupply}. Generic over `K extends SpokeChainKey` (defaults to
+ * the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
+ */
+export type UseSupplyVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  MoneyMarketSupplyActionParams<K, false>,
+  'raw'
+>;
 
 /**
  * React hook for supplying tokens to the Sodax money market protocol.
  *
- * Provides a mutation for performing the supply operation using React Query. Useful
- * for UI components needing to manage the full state (pending, error, etc.) of a supply
- * transaction. It handles transaction creation, cross-chain logic, and errors.
- *
- * @returns {UseMutationResult<SupplyResponse, MoneyMarketError<'CREATE_SUPPLY_INTENT_FAILED' | 'SUPPLY_UNKNOWN_ERROR' | RelayErrorCode>, UseSupplyParams>}
- *   Mutation result object from React Query, where:
- *   - mutateAsync(params: UseSupplyParams): Promise<SupplyResponse>
- *     Initiates a supply transaction using the given MoneyMarketSupplyParams and SpokeProvider.
- *   - isPending: boolean indicating if a transaction is in progress.
- *   - error: MoneyMarketError if an error occurred while supplying, otherwise undefined.
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  *
  * @example
- * ```typescript
- * const { mutateAsync: supply, isPending, error } = useSupply();
- * await supply({ params: supplyParams, spokeProvider });
+ * ```tsx
+ * const walletProvider = useWalletProvider({ xChainId: chainKey });
+ * const { mutateAsync: supply, isError, error } = useSupply();
+ * if (!walletProvider) return;
+ * try {
+ *   const { spokeTxHash, hubTxHash } = await supply({ params: supplyParams, walletProvider });
+ * } catch (e) {
+ *   // surfaced via mutation.error / onError
+ * }
  * ```
- *
- * @throws {Error|MoneyMarketError<...>} When:
- *   - `spokeProvider` is not provided or invalid.
- *   - The underlying supply transaction fails.
  */
-export function useSupply(): UseMutationResult<
-  SupplyResponse,
-  MoneyMarketError<'CREATE_SUPPLY_INTENT_FAILED' | 'SUPPLY_UNKNOWN_ERROR' | RelayErrorCode>,
-  UseSupplyParams
-> {
+export function useSupply<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseSupplyVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseSupplyVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<
-    SupplyResponse,
-    MoneyMarketError<'CREATE_SUPPLY_INTENT_FAILED' | 'SUPPLY_UNKNOWN_ERROR' | RelayErrorCode>,
-    UseSupplyParams
-  >({
-    mutationFn: async ({ params, spokeProvider }: UseSupplyParams) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
-      }
-
-      const response = await sodax.moneyMarket.supply(params, spokeProvider);
-
-      if (!response.ok) {
-        throw response.error;
-      }
-
-      return response;
+  return useSafeMutation<TxHashPair, Error, UseSupplyVars<K>>({
+    mutationKey: ['mm', 'supply'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.moneyMarket.supply({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['mm', 'userReservesData', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['mm', 'userFormattedSummary', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'aTokensBalances'] });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'allowance', params.srcChainKey, params.token, params.action] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

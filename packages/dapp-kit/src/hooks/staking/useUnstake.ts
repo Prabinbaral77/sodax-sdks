@@ -1,54 +1,40 @@
 // packages/dapp-kit/src/hooks/staking/useUnstake.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { UnstakeParams, SpokeTxHash, HubTxHash, SpokeProvider } from '@sodax/sdk';
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
+import type { SpokeChainKey, TxHashPair, UnstakeAction } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
+
+export type UseUnstakeVars<K extends SpokeChainKey = SpokeChainKey> = Omit<UnstakeAction<K, false>, 'raw'>;
 
 /**
- * Hook for executing unstake transactions to unstake xSODA shares.
- * Uses React Query's useMutation for better state management and caching.
+ * React hook for initiating an SODA unstake.
  *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the unstake
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<UnstakeParams, 'action'>>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: unstake, isPending } = useUnstake(spokeProvider);
- *
- * const handleUnstake = async () => {
- *   const result = await unstake({
- *     amount: 1000000000000000000n, // 1 xSODA
- *     account: '0x...'
- *   });
- *
- *   console.log('Unstake successful:', result);
- * };
- * ```
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useUnstake(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<UnstakeParams, 'action'>> {
+export function useUnstake<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseUnstakeVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseUnstakeVars<K>> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation<[SpokeTxHash, HubTxHash], Error, Omit<UnstakeParams, 'action'>>({
-    mutationFn: async (params: Omit<UnstakeParams, 'action'>) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-
-      const result = await sodax.staking.unstake({ ...params, action: 'unstake' }, spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Unstake failed: ${result.error.code}`);
-      }
-
-      return result.value;
-    },
-    onSuccess: () => {
-      // Invalidate relevant queries to refresh data
-      queryClient.invalidateQueries({ queryKey: ['stakingInfo'] });
-      queryClient.invalidateQueries({ queryKey: ['unstakingInfo'] });
-      queryClient.invalidateQueries({ queryKey: ['unstakingInfoWithPenalty'] });
+  return useSafeMutation<TxHashPair, Error, UseUnstakeVars<K>>({
+    mutationKey: ['staking', 'unstake'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.staking.unstake({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['staking', 'info', params.srcChainKey, params.srcAddress] });
+      // Scope to (srcChainKey, srcAddress) so a user's unstake doesn't refetch every other user's
+      // staking data. Matches `useUnstakingInfo` / `useUnstakingInfoWithPenalty` query keys.
+      queryClient.invalidateQueries({ queryKey: ['staking', 'unstakingInfo', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['staking', 'unstakingInfoWithPenalty', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'allowance', params.srcChainKey, 'unstake'] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

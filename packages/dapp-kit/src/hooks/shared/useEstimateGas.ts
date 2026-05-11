@@ -1,18 +1,21 @@
-import { type GetEstimateGasReturnType, type SpokeProvider, SpokeService, type TxReturnType } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+// packages/dapp-kit/src/hooks/shared/useEstimateGas.ts
+import type { EstimateGasParams, GetEstimateGasReturnType, SpokeChainKey } from '@sodax/sdk';
+import { useSodaxContext } from './useSodaxContext.js';
+import type { MutationHookParams } from './types.js';
+import { useSafeMutation, type SafeUseMutationResult } from './useSafeMutation.js';
+import { unwrapResult } from './unwrapResult.js';
 
-export function useEstimateGas<T extends SpokeProvider = SpokeProvider>(
-  spokeProvider: T | undefined,
-): UseMutationResult<GetEstimateGasReturnType<T>, Error, TxReturnType<T, true>> {
-  return useMutation<GetEstimateGasReturnType<T>, Error, TxReturnType<T, true>>({
-    mutationFn: async (rawTx: TxReturnType<T, true>) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
-      }
-
-      const response = await SpokeService.estimateGas(rawTx, spokeProvider);
-
-      return response;
-    },
+export function useEstimateGas<C extends SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<GetEstimateGasReturnType<C>, EstimateGasParams<C>> = {}): SafeUseMutationResult<
+  GetEstimateGasReturnType<C>,
+  Error,
+  EstimateGasParams<C>
+> {
+  const { sodax } = useSodaxContext();
+  return useSafeMutation<GetEstimateGasReturnType<C>, Error, EstimateGasParams<C>>({
+    mutationKey: ['shared', 'estimateGas'],
+    ...mutationOptions,
+    mutationFn: async params => unwrapResult(await sodax.spokeService.estimateGas<C>(params)),
   });
 }

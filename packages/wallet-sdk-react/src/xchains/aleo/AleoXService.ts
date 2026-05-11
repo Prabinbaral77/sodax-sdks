@@ -1,7 +1,7 @@
-import { XService } from '@/core/XService';
+import { XService } from '../../core/XService.js';
 import type { XToken } from '@sodax/types';
 import { Network } from '@provablehq/aleo-types';
-import { isNativeToken } from '../../utils';
+import { isNativeToken } from '../../utils/index.js';
 
 // Lazy-load @provablehq/sdk to avoid triggering WASM initialization at import time.
 // The WASM module uses top-level await which fails during SSR / Vercel builds.
@@ -54,7 +54,7 @@ export class AleoXService extends XService {
     this._networkClient = null;
   }
 
-  async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
+  override async getBalance(address: string | undefined, xToken: XToken): Promise<bigint> {
     if (!address) return 0n;
 
     try {

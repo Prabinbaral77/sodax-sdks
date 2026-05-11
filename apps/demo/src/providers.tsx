@@ -1,54 +1,41 @@
 import React, { useMemo, type ReactNode } from 'react';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { SodaxWalletProvider } from '@sodax/wallet-sdk-react';
-import type { RpcConfig } from '@sodax/types';
-import { SodaxProvider } from '@sodax/dapp-kit';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { SodaxWalletProvider, type SodaxWalletConfig } from '@sodax/wallet-sdk-react';
+import { SodaxProvider, createSodaxQueryClient } from '@sodax/dapp-kit';
 import { productionSolverConfig, stagingSolverConfig, devSolverConfig } from './constants';
-import type { SodaxConfig, SolverConfigParams } from '@sodax/sdk';
+import { type SodaxConfig, type SolverConfig, ChainKeys, type DeepPartial, type RpcConfig } from '@sodax/sdk';
 import { SolverEnv, useAppStore } from './zustand/useAppStore';
 
-const queryClient = new QueryClient();
+const queryClient = createSodaxQueryClient();
 
 const rpcConfig: RpcConfig = {
-  // evm in dev mode
-  sonic: 'https://sonic-rpc.publicnode.com',
-  '0xa86a.avax': 'https://avalanche-c-chain-rpc.publicnode.com',
-  '0xa4b1.arbitrum': 'https://arbitrum.drpc.org',
-  '0x2105.base': 'https://base.drpc.org',
-  '0x38.bsc': 'https://bsc.drpc.org',
-  '0xa.optimism': 'https://optimism-rpc.publicnode.com',
-  '0x89.polygon': 'https://polygon-bor-rpc.publicnode.com',
-  ethereum: 'https://ethereum-rpc.publicnode.com',
-  hyper: 'https://rpc.hyperliquid.xyz/evm',
-
-  //solana
-  //TODO: to be reverted before push! the rpc below isn't working, revert before pushing but we should check
-  // solana: process.env.SOLANA_RPC_URL || 'https://solana-mainnet.g.alchemy.com/v2/fnxOcaJJQBJZeMMFpLqwg',
-
-  solana: process.env.SOLANA_RPC_URL ?? process.env.VITE_SOLANA_RPC_URL ?? 'https://solana-rpc.publicnode.com',
-  //stellar
-  stellar: {
-    horizonRpcUrl: 'https://horizon.stellar.org',
-    sorobanRpcUrl: 'https://magical-bitter-frost.stellar-mainnet.quiknode.pro/78709b736890cf5a9bcb36e118b9d18e8ecdb7ee',
+  [ChainKeys.SONIC_MAINNET]: process.env.SONIC_RPC_URL ?? 'https://sonic-rpc.publicnode.com',
+  [ChainKeys.AVALANCHE_MAINNET]: process.env.AVALANCHE_RPC_URL ?? 'https://avalanche-c-chain-rpc.publicnode.com',
+  [ChainKeys.BASE_MAINNET]: process.env.BASE_RPC_URL ?? 'https://base.drpc.org',
+  [ChainKeys.BSC_MAINNET]: process.env.BSC_RPC_URL ?? 'https://bsc.drpc.org',
+  [ChainKeys.OPTIMISM_MAINNET]: process.env.OPTIMISM_RPC_URL ?? 'https://optimism-rpc.publicnode.com',
+  [ChainKeys.POLYGON_MAINNET]: process.env.POLYGON_RPC_URL ?? 'https://polygon-bor-rpc.publicnode.com',
+  [ChainKeys.ETHEREUM_MAINNET]: process.env.ETHEREUM_RPC_URL ?? 'https://ethereum-rpc.publicnode.com',
+  [ChainKeys.HYPEREVM_MAINNET]: process.env.HYPEREVM_RPC_URL ?? 'https://rpc.hyperliquid.xyz/evm',
+  [ChainKeys.SOLANA_MAINNET]:
+    process.env.SOLANA_RPC_URL ?? process.env.VITE_SOLANA_RPC_URL ?? 'https://solana-rpc.publicnode.com',
+  [ChainKeys.STELLAR_MAINNET]: {
+    horizonRpcUrl: process.env.STELLAR_HORIZON_RPC_URL ?? 'https://horizon.stellar.org',
+    sorobanRpcUrl:
+      process.env.STELLAR_SOROBAN_RPC_URL ??
+      'https://magical-bitter-frost.stellar-mainnet.quiknode.pro/78709b736890cf5a9bcb36e118b9d18e8ecdb7ee',
   },
-
-  // bitcoin — override radfi endpoints (canary)
-  // bitcoin: {
-  //   rpcUrl: 'https://mempool.space/signet/api',
-  //   radfiApiUrl: 'https://staging.api.radfi.co/api', // https://api.canary.radfi.co/api for prod
-  //   radfiUmsUrl: 'https://staging.ums.radfi.co/api', // https://ums.radfi.co/api for prod
-  // },
-  bitcoin: {
-    radfiApiUrl: 'https://api.radfi.co/api',
-    radfiUmsUrl: 'https://ums.radfi.co/api',
+  [ChainKeys.BITCOIN_MAINNET]: {
+    radfiApiUrl: process.env.RADFI_API_URL ?? 'https://api.radfi.co/api',
+    radfiUmsUrl: process.env.RADFI_UMS_URL ?? 'https://ums.radfi.co/api',
+    rpcUrl: process.env.BITCOIN_RPC_URL ?? 'https://mempool.space/api',
   },
-
   // aleo
-  aleo: 'https://api.provable.com/v2',
+  [ChainKeys.ALEO_MAINNET]: process.env.ALEO_RPC_URL ?? 'https://api.provable.com/v2',
 };
 
-const configMap: Record<SolverEnv, SolverConfigParams> = {
+const configMap: Record<SolverEnv, SolverConfig> = {
   [SolverEnv.Production]: productionSolverConfig,
   [SolverEnv.Staging]: stagingSolverConfig,
   [SolverEnv.Dev]: devSolverConfig,
@@ -57,16 +44,81 @@ const configMap: Record<SolverEnv, SolverConfigParams> = {
 export default function Providers({ children }: { children: ReactNode }) {
   const solverEnvironment = useAppStore(state => state.solverEnvironment);
 
-  const sodaxConfig: SodaxConfig = useMemo(() => {
+  const walletConfig = useMemo((): SodaxWalletConfig => {
+    const wcProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;
+    const walletConnect = wcProjectId ? { projectId: wcProjectId } : undefined;
+
     return {
-      swaps: configMap[solverEnvironment],
+      EVM: {
+        ssr: false,
+        reconnectOnMount: true,
+        walletConnect,
+        chains: {
+          [ChainKeys.SONIC_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.SONIC_MAINNET] },
+          [ChainKeys.AVALANCHE_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.AVALANCHE_MAINNET] },
+          [ChainKeys.BASE_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.BASE_MAINNET] },
+          [ChainKeys.BSC_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.BSC_MAINNET] },
+          [ChainKeys.OPTIMISM_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.OPTIMISM_MAINNET] },
+          [ChainKeys.POLYGON_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.POLYGON_MAINNET] },
+          [ChainKeys.HYPEREVM_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.HYPEREVM_MAINNET] },
+          // EVM example: tighter confirmations on Arbitrum, longer timeout on Ethereum.
+          [ChainKeys.ARBITRUM_MAINNET]: {
+            rpcUrl: rpcConfig[ChainKeys.ARBITRUM_MAINNET],
+            defaults: { waitForTransactionReceipt: { confirmations: 1, timeout: 60_000 } },
+          },
+          [ChainKeys.ETHEREUM_MAINNET]: {
+            rpcUrl: rpcConfig[ChainKeys.ETHEREUM_MAINNET],
+            defaults: { waitForTransactionReceipt: { confirmations: 3, timeout: 180_000 } },
+          },
+        },
+      },
+      SOLANA: {
+        chains: {
+          [ChainKeys.SOLANA_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.SOLANA_MAINNET] },
+        },
+      },
+      SUI: {},
+      BITCOIN: {
+        chains: {
+          [ChainKeys.BITCOIN_MAINNET]: rpcConfig[ChainKeys.BITCOIN_MAINNET],
+        },
+      },
+      STELLAR: {
+        chains: {
+          [ChainKeys.STELLAR_MAINNET]: rpcConfig[ChainKeys.STELLAR_MAINNET],
+        },
+      },
+      ICON: {},
+      INJECTIVE: {},
+      NEAR: {},
+      STACKS: { chains: { [ChainKeys.STACKS_MAINNET]: 'mainnet' } },
+    };
+  }, []);
+
+  // override sodax config for rpc urls and solver config
+  const sodaxConfig: DeepPartial<SodaxConfig> = useMemo(() => {
+    return {
+      solver: configMap[solverEnvironment],
+      chains: {
+        [ChainKeys.SONIC_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.SONIC_MAINNET] },
+        [ChainKeys.AVALANCHE_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.AVALANCHE_MAINNET] },
+        [ChainKeys.BASE_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.BASE_MAINNET] },
+        [ChainKeys.BSC_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.BSC_MAINNET] },
+        [ChainKeys.OPTIMISM_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.OPTIMISM_MAINNET] },
+        [ChainKeys.POLYGON_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.POLYGON_MAINNET] },
+        [ChainKeys.ETHEREUM_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.ETHEREUM_MAINNET] },
+        [ChainKeys.HYPEREVM_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.HYPEREVM_MAINNET] },
+        [ChainKeys.SOLANA_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.SOLANA_MAINNET] },
+        [ChainKeys.STELLAR_MAINNET]: rpcConfig[ChainKeys.STELLAR_MAINNET],
+        [ChainKeys.BITCOIN_MAINNET]: rpcConfig[ChainKeys.BITCOIN_MAINNET],
+      },
     };
   }, [solverEnvironment]);
 
   return (
-    <SodaxProvider testnet={false} config={sodaxConfig} rpcConfig={rpcConfig}>
+    <SodaxProvider config={sodaxConfig}>
       <QueryClientProvider client={queryClient}>
-        <SodaxWalletProvider rpcConfig={rpcConfig} options={{ wagmi: { ssr: false, reconnectOnMount: true } }}>{children}</SodaxWalletProvider>
+        <SodaxWalletProvider config={walletConfig}>{children}</SodaxWalletProvider>
       </QueryClientProvider>
     </SodaxProvider>
   );

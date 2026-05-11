@@ -1,7 +1,7 @@
 import BigNumber from 'bignumber.js';
 import { type BigNumberValue, normalize, normalizeBN, valueToBigNumber } from '../../bignumber.js';
 import { RAY_DECIMALS, SECONDS_PER_YEAR, USD_DECIMALS } from '../../constants.js';
-import { LTV_PRECISION } from '../../index.js';
+import { LTV_PRECISION } from '../../constants.js';
 import { calculateCompoundedRate } from '../compounded-interest/calculate-compounded-interest.js';
 import { type EModeDataString, type FormattedReserveEMode, getAndFormatReserveEModes } from '../emode/index.js';
 import {
@@ -335,7 +335,7 @@ export function formatReserves<T extends ReserveDataWithPrice>({
   currentTimestamp,
   marketReferencePriceInUsd,
   marketReferenceCurrencyDecimals,
-}: FormatReservesUSDRequest<T>) {
+}: FormatReservesUSDRequest<T>): Array<T & FormatReserveUSDResponse> {
   return reserves.map(reserve => {
     const formattedReserve = formatReserveUSD({
       reserve,

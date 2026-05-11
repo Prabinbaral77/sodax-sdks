@@ -1,65 +1,49 @@
-import type { MoneyMarketError, MoneyMarketWithdrawParams, RelayErrorCode, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
-
-export type UseWithdrawParams = {
-  params: MoneyMarketWithdrawParams;
-  spokeProvider: SpokeProvider;
-};
-
-interface WithdrawResponse {
-  ok: true;
-  value: [string, string];
-}
+// packages/dapp-kit/src/hooks/mm/useWithdraw.ts
+import type { MoneyMarketWithdrawActionParams, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * Hook for performing withdrawals from the Sodax money market.
- *
- * This hook exposes a mutation that executes the complete withdrawal logic, including transaction
- * creation and handling cross-chain communication. It leverages React Query's mutation API for
- * easy asynchronous handling and status tracking within UI components.
- *
- * @returns {UseMutationResult<WithdrawResponse, MoneyMarketError<'CREATE_WITHDRAW_INTENT_FAILED' | 'WITHDRAW_UNKNOWN_ERROR' | RelayErrorCode>, UseWithdrawParams>}
- *   Mutation result object, with:
- *   - mutateAsync: (params: UseWithdrawParams) => Promise<WithdrawResponse>
- *       Initiates the withdrawal using the provided params.
- *   - isPending: boolean indicating if a transaction is in progress.
- *   - error: MoneyMarketError if an error occurred while withdrawing, otherwise undefined.
- *
- * @example
- * ```typescript
- * const { mutateAsync: withdraw, isPending, error } = useWithdraw();
- * await withdraw({ params: withdrawParams, spokeProvider });
- * ```
- *
- * @throws {Error} When:
- *   - spokeProvider is not provided or invalid.
- *   - Underlying withdrawal logic fails.
+ * Mutation variables for {@link useWithdraw}. Generic over `K extends SpokeChainKey` (defaults to
+ * the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useWithdraw(): UseMutationResult<
-  WithdrawResponse,
-  MoneyMarketError<'CREATE_WITHDRAW_INTENT_FAILED' | 'WITHDRAW_UNKNOWN_ERROR' | RelayErrorCode>,
-  UseWithdrawParams
-> {
+export type UseWithdrawVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  MoneyMarketWithdrawActionParams<K, false>,
+  'raw'
+>;
+
+/**
+ * React hook for withdrawing supplied tokens from the Sodax money market protocol.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useWithdraw<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseWithdrawVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseWithdrawVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<
-    WithdrawResponse,
-    MoneyMarketError<'CREATE_WITHDRAW_INTENT_FAILED' | 'WITHDRAW_UNKNOWN_ERROR' | RelayErrorCode>,
-    UseWithdrawParams
-  >({
-    mutationFn: async ({ params, spokeProvider }) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
+  return useSafeMutation<TxHashPair, Error, UseWithdrawVars<K>>({
+    mutationKey: ['mm', 'withdraw'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.moneyMarket.withdraw({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['mm', 'userReservesData', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['mm', 'userFormattedSummary', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'aTokensBalances'] });
+      const balanceChains = new Set([params.srcChainKey, params.dstChainKey ?? params.srcChainKey]);
+      for (const chainKey of balanceChains) {
+        queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', chainKey] });
       }
-
-      const response = await sodax.moneyMarket.withdraw(params, spokeProvider);
-
-      if (!response.ok) {
-        throw response.error;
-      }
-
-      return response;
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

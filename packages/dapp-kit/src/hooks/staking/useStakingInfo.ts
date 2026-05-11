@@ -1,50 +1,42 @@
-// packages/dapp-kit/src/hooks/staking/useStakingInfo.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { StakingInfo, SpokeProvider } from '@sodax/sdk';
+import type { StakingInfo } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { ReadHookParams } from '../shared/types.js';
+
+export type UseStakingInfoParams = ReadHookParams<
+  StakingInfo,
+  {
+    srcAddress: `0x${string}` | undefined;
+    srcChainKey: SpokeChainKey | undefined;
+  }
+>;
 
 /**
- * Hook for fetching comprehensive staking information for a user.
- * Uses React Query for efficient caching and state management.
- *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the query
- * @param {number} refetchInterval - The interval in milliseconds to refetch data (default: 5000)
- * @returns {UseQueryResult<StakingInfo, Error>} Query result object containing staking info and state
- *
- * @example
- * ```typescript
- * const { data: stakingInfo, isLoading, error } = useStakingInfo(spokeProvider);
- *
- * if (isLoading) return <div>Loading staking info...</div>;
- * if (stakingInfo) {
- *   console.log('Total staked:', stakingInfo.totalStaked);
- *   console.log('User staked:', stakingInfo.userStaked);
- *   console.log('xSODA balance:', stakingInfo.userXSodaBalance);
- * }
- * ```
+ * React hook to fetch the user's staking info (xSODA balance, share value, underlying SODA) by
+ * deriving the hub wallet from the spoke `srcAddress` + `srcChainKey`. Throws on `!ok` so React
+ * Query lands in `error` state.
  */
-export function useStakingInfo(
-  spokeProvider: SpokeProvider | undefined,
-  refetchInterval = 5000,
-): UseQueryResult<StakingInfo, Error> {
+export function useStakingInfo({ params, queryOptions }: UseStakingInfoParams = {}): UseQueryResult<
+  StakingInfo,
+  Error
+> {
   const { sodax } = useSodaxContext();
+  const srcAddress = params?.srcAddress;
+  const srcChainKey = params?.srcChainKey;
 
-  return useQuery({
-    queryKey: ['soda', 'stakingInfo', spokeProvider?.chainConfig.chain.id],
+  return useQuery<StakingInfo, Error>({
+    queryKey: ['staking', 'info', srcChainKey, srcAddress],
     queryFn: async () => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
+      if (!srcAddress || !srcChainKey) {
+        throw new Error('srcAddress and srcChainKey are required');
       }
-
-      const result = await sodax.staking.getStakingInfoFromSpoke(spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Failed to fetch staking info: ${result.error.code}`);
-      }
-
+      const result = await sodax.staking.getStakingInfoFromSpoke(srcAddress, srcChainKey);
+      if (!result.ok) throw result.error;
       return result.value;
     },
-    enabled: !!spokeProvider,
-    refetchInterval,
+    enabled: !!srcAddress && !!srcChainKey,
+    refetchInterval: 5_000,
+    ...queryOptions,
   });
 }

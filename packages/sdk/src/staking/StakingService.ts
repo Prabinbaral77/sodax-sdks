@@ -3,73 +3,118 @@ import invariant from 'tiny-invariant';
 import { erc20Abi, type Address, type Hex } from 'viem';
 import { StakingLogic } from './StakingLogic.js';
 import { stakedSodaAbi } from '../shared/abis/index.js';
-import type {
-  UserUnstakeInfo,
-  EvmContractCall,
-  TxReturnType,
-  GetSpokeDepositParamsType,
-  Prettify,
-  GetAddressType,
-  Result,
-  StellarSpokeProviderType,
-  EvmSpokeProviderType,
-  SonicSpokeProviderType,
-} from '../shared/types.js';
+import type { IntentTxResult, TxHashPair } from '../shared/types/types.js';
 import {
   encodeContractCalls,
-  Erc20Service,
   EvmVaultTokenService,
   relayTxAndWaitPacket,
-  SolanaSpokeProvider,
-  SpokeService,
+  type SpokeService,
   type EvmHubProvider,
-  type SpokeProvider,
-  type SpokeProviderType,
   encodeAddress,
   EvmAssetManagerService,
-  StellarSpokeService,
-  type RelayError,
-  HubService,
-  isHubSpokeProvider,
-} from '../index.js';
-import { isEvmSpokeProviderType, isSonicSpokeProviderType, isStellarSpokeProviderType } from '../shared/guards.js';
-import { DEFAULT_RELAY_TX_TIMEOUT } from '../shared/constants.js';
-import { type HttpUrl, type XToken, type SpokeChainId, getIntentRelayChainId, type HubAssetInfo } from '@sodax/types';
-import { getHubChainConfig, type ConfigService } from '../shared/config/ConfigService.js';
+  type ConfigService,
+  isHubChainKeyType,
+  isStellarChainKeyType,
+  Erc20Service,
+  isEvmSpokeOnlyChainKeyType,
+  isOptionalEvmWalletProviderType,
+  isOptionalStellarWalletProviderType,
+  type SendMessageParams,
+  type SpokeApproveParams,
+} from '../shared/index.js';
+import {
+  type HttpUrl,
+  type XToken,
+  type SpokeChainKey,
+  getIntentRelayChainId,
+  type UserUnstakeInfo,
+  type EvmContractCall,
+  type TxReturnType,
+  type GetAddressType,
+  type Result,
+  type GetWalletProviderType,
+  isEvmChainKey,
+  type EvmChainKey,
+  type HubChainKey,
+  type GetTokenAddressType,
+  type StellarChainKey,
+  type SpokeExecActionParams,
+  type EvmSpokeOnlyChainKey,
+} from '@sodax/types';
 
-export type StakeParams = {
+export type StakeParams<K extends SpokeChainKey> = {
+  srcChainKey: K; // chain key of the spoke chain to stake from
+  srcAddress: Address; // account to stake from
   amount: bigint; // amount to stake
   minReceive: bigint; // minimum amount to receive
-  account: Address; // account to stake from
   action: 'stake';
 };
 
-export type UnstakeParams = {
+export type StakeAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<K, Raw, StakeParams<K>>;
+
+export type UnstakeParams<K extends SpokeChainKey> = {
+  srcChainKey: K; // chain key of the spoke chain to unstake from
+  srcAddress: Address; // account to unstake from
   amount: bigint; // amount of xSoda to unstake
-  account: Address;
   action: 'unstake';
 };
 
-export type ClaimParams = {
+export type UnstakeAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  UnstakeParams<K>
+>;
+
+export type ClaimParams<K extends SpokeChainKey> = {
+  srcAddress: Address;
+  srcChainKey: K; // chain key of the spoke chain to claim from
   requestId: bigint;
   amount: bigint; // claimable amount after penalty calculation
   action: 'claim';
 };
 
-export type CancelUnstakeParams = {
+export type ClaimAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<K, Raw, ClaimParams<K>>;
+
+export type CancelUnstakeParams<K extends SpokeChainKey> = {
+  srcAddress: Address;
+  srcChainKey: K; // chain key of the spoke chain to cancel unstake from
   requestId: bigint;
   action: 'cancelUnstake';
 };
 
-export type InstantUnstakeParams = {
+export type CancelUnstakeAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  CancelUnstakeParams<K>
+>;
+
+export type InstantUnstakeParams<K extends SpokeChainKey> = {
+  srcAddress: Address;
+  srcChainKey: K; // chain key of the spoke chain to instant unstake from
   amount: bigint;
   minAmount: bigint;
-  account: Address;
   action: 'instantUnstake';
 };
 
-export type StakingAction = 'stake' | 'unstake' | 'claim' | 'cancelUnstake' | 'instantUnstake';
-export type StakingParams = StakeParams | UnstakeParams | ClaimParams | CancelUnstakeParams | InstantUnstakeParams;
+export type InstantUnstakeAction<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  InstantUnstakeParams<K>
+>;
+
+export type StakingActionType = 'stake' | 'unstake' | 'claim' | 'cancelUnstake' | 'instantUnstake';
+export type StakingActionUnion<K extends SpokeChainKey> =
+  | StakeParams<K>
+  | UnstakeParams<K>
+  | ClaimParams<K>
+  | CancelUnstakeParams<K>
+  | InstantUnstakeParams<K>;
+
+export type StakingParamsUnion<K extends SpokeChainKey, Raw extends boolean> = SpokeExecActionParams<
+  K,
+  Raw,
+  StakingActionUnion<K>
+>;
 
 export type StakingInfo = {
   totalStaked: bigint; // Total SODA staked (totalAssets from xSODA vault)
@@ -96,90 +141,78 @@ export type StakingConfig = {
   maxPenalty: bigint; // percentage (1-100)
 };
 
-export type StakingErrorCode =
-  | 'STAKE_FAILED'
-  | 'UNSTAKE_FAILED'
-  | 'INSTANT_UNSTAKE_FAILED'
-  | 'CLAIM_FAILED'
-  | 'CANCEL_UNSTAKE_FAILED'
-  | 'INFO_FETCH_FAILED'
-  | 'ALLOWANCE_CHECK_FAILED'
-  | 'APPROVAL_FAILED';
-
-export type StakingError<T extends StakingErrorCode> = {
-  code: T;
-  error: unknown;
-};
-
 export type StakingServiceConstructorParams = {
   hubProvider: EvmHubProvider;
-  relayerApiEndpoint: HttpUrl;
-  configService: ConfigService;
+  config: ConfigService;
+  spoke: SpokeService;
 };
 
 /**
- * StakingService provides a high-level interface for staking operations
- * including staking SODA tokens, unstaking, claiming rewards, and retrieving staking information.
- * All transaction methods return encoded contract calls that can be sent via a wallet provider.
+ * Orchestrates all SODA token staking operations on the SODAX hub-and-spoke network.
+ *
+ * Users stake SODA to receive xSoda shares (ERC-4626 vault). The full lifecycle is:
+ * - **Stake**: deposit SODA on any spoke chain → receive xSoda on the hub (Sonic)
+ * - **Unstake**: initiate a delayed withdrawal; a linear penalty applies until the full unstaking period elapses
+ * - **Instant unstake**: bypass the waiting period by paying slippage through the StakingRouter
+ * - **Claim**: redeem SODA after the unstaking period expires
+ * - **Cancel unstake**: abort a pending unstake request and re-stake the underlying SODA as xSoda
+ *
+ * All mutating methods follow the intent pattern: a `create*Intent` method submits the spoke-chain
+ * transaction and returns relay data, while the matching top-level method (`stake`, `unstake`, …)
+ * additionally relays the intent to the hub and waits for the cross-chain packet to land.
  */
 export class StakingService {
   private readonly hubProvider: EvmHubProvider;
   private readonly relayerApiEndpoint: HttpUrl;
-  private readonly configService: ConfigService;
+  private readonly config: ConfigService;
+  private readonly spoke: SpokeService;
 
-  constructor({ hubProvider, relayerApiEndpoint, configService }: StakingServiceConstructorParams) {
+  constructor({ hubProvider, config, spoke }: StakingServiceConstructorParams) {
     this.hubProvider = hubProvider;
-    this.relayerApiEndpoint = relayerApiEndpoint;
-    this.configService = configService;
+    this.relayerApiEndpoint = config.relay.relayerApiEndpoint;
+    this.config = config;
+    this.spoke = spoke;
   }
 
   /**
-   * Check if allowance is valid for the staking operations
-   * @param params - The staking parameters
-   * @param spokeProvider - The spoke provider
-   * @returns {Promise<Result<boolean, StakingError<'ALLOWANCE_CHECK_FAILED'>>>}
+   * Checks whether the current token allowance is sufficient for the requested staking action.
+   *
+   * Relevant only for `stake`, `unstake`, and `instantUnstake` actions:
+   * - For EVM spoke chains: verifies the spoke asset-manager (or hub wallet for hub-chain ops) has enough allowance.
+   * - For Stellar: delegates to the spoke's allowance check.
+   * - For other non-EVM chains: no on-chain allowance is required; always resolves `true`.
+   *
+   * @param _params - Typed action params union including the action discriminant, source chain, address, and amount.
+   * @returns `{ ok: true, value: true }` when allowance is sufficient; `{ ok: false, error }` on failure or unsupported action.
    */
-  public async isAllowanceValid<S extends SpokeProviderType>({
-    params,
-    spokeProvider,
-  }: Prettify<{ params: StakingParams; spokeProvider: S }>): Promise<
-    Result<boolean, StakingError<'ALLOWANCE_CHECK_FAILED'>>
-  > {
+  public async isAllowanceValid<K extends SpokeChainKey, Raw extends boolean>(
+    _params: StakingParamsUnion<K, Raw>,
+  ): Promise<Result<boolean>> {
+    const { params } = _params;
     try {
       if (params.action === 'stake' || params.action === 'unstake' || params.action === 'instantUnstake') {
         invariant(params.amount > 0n, 'Amount must be greater than 0');
 
-        const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
         const targetToken =
-          params.action === 'stake' || !isHubSpokeProvider(spokeProvider, this.hubProvider)
-            ? spokeProvider.chainConfig.supportedTokens.SODA?.address
+          params.action === 'stake' || !isHubChainKeyType(params.srcChainKey)
+            ? (this.config.sodaxConfig.chains[params.srcChainKey].supportedTokens['SODA'] as XToken).address
             : this.hubProvider.chainConfig.addresses.xSoda;
         invariant(targetToken, 'Target token not found');
 
-        if (isEvmSpokeProviderType(spokeProvider) || isSonicSpokeProviderType(spokeProvider)) {
-          const spender = isHubSpokeProvider(spokeProvider, this.hubProvider)
-            ? await HubService.getUserRouter(
-                walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-                this.hubProvider,
-              )
-            : spokeProvider.chainConfig.addresses.assetManager;
-          const allowanceResult = await Erc20Service.isAllowanceValid(
-            targetToken as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-            params.amount,
-            walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-            spender as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-            spokeProvider,
-          );
+        if (isEvmChainKey(params.srcChainKey) || isHubChainKeyType(params.srcChainKey)) {
+          const spender = isHubChainKeyType(params.srcChainKey)
+            ? await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
+            : this.config.getChainConfig(params.srcChainKey).addresses.assetManager;
 
-          if (!allowanceResult.ok) {
-            return {
-              ok: false,
-              error: {
-                code: 'ALLOWANCE_CHECK_FAILED',
-                error: allowanceResult.error,
-              },
-            };
-          }
+          const allowanceResult = await this.spoke.isAllowanceValid({
+            srcChainKey: params.srcChainKey,
+            token: targetToken,
+            amount: params.amount,
+            owner: params.srcAddress,
+            spender: spender as GetAddressType<EvmChainKey | HubChainKey>,
+          });
+
+          if (!allowanceResult.ok) return allowanceResult;
 
           return {
             ok: true,
@@ -187,11 +220,17 @@ export class StakingService {
           };
         }
 
-        if (isStellarSpokeProviderType(spokeProvider)) {
-          return {
-            ok: true,
-            value: await StellarSpokeService.hasSufficientTrustline(targetToken, params.amount, spokeProvider),
-          };
+        if (isStellarChainKeyType(params.srcChainKey)) {
+          const allowanceResult = await this.spoke.isAllowanceValid({
+            srcChainKey: params.srcChainKey,
+            token: targetToken,
+            amount: params.amount,
+            owner: params.srcAddress,
+          });
+
+          if (!allowanceResult.ok) return allowanceResult;
+
+          return allowanceResult;
         }
 
         // For non-EVM chains (Icon, Sui, Stellar, etc.), no allowance check needed
@@ -204,400 +243,399 @@ export class StakingService {
       // Return false by default
       return {
         ok: false,
-        error: {
-          code: 'ALLOWANCE_CHECK_FAILED',
-          error: new Error('Invalid staking action'),
-        },
+        error: new Error('Invalid staking action'),
       };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'ALLOWANCE_CHECK_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Approve token spending for the staking operations
-   * @param params - The staking parameters
-   * @param spokeProvider - The spoke provider
-   * @param raw - Whether to return raw transaction data
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'APPROVAL_FAILED'>>>
+   * Submits a token-spending approval on the source chain for a `stake`, `unstake`, or `instantUnstake` action.
+   *
+   * The spender address is resolved automatically:
+   * - Hub chain: the user's hub wallet (derived from spoke address)
+   * - EVM spoke chain: the chain's asset-manager contract
+   *
+   * Must be called before executing the corresponding action whenever `isAllowanceValid` returns `false`.
+   * Only EVM (spoke + hub) and Stellar chains support approvals; all other chains return an error.
+   *
+   * @param _params - Typed action params including `raw` flag and a chain-appropriate wallet provider.
+   * @returns The approval transaction hash (or raw call data when `raw: true`), wrapped in `Result`.
    */
-  public async approve<S extends SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: StakingParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'APPROVAL_FAILED'>>
-  > {
+  public async approve<K extends SpokeChainKey, Raw extends boolean>(
+    _params: StakingParamsUnion<K, Raw>,
+  ): Promise<Result<TxReturnType<K, Raw>>> {
+    const { params } = _params;
     try {
       if (params.action === 'stake' || params.action === 'unstake' || params.action === 'instantUnstake') {
         invariant(params.amount > 0n, 'Amount must be greater than 0');
 
-        const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
         const targetToken =
-          params.action === 'stake' || !isHubSpokeProvider(spokeProvider, this.hubProvider)
-            ? spokeProvider.chainConfig.supportedTokens.SODA?.address
+          params.action === 'stake' || !isHubChainKeyType(params.srcChainKey)
+            ? (this.config.sodaxConfig.chains[params.srcChainKey].supportedTokens['SODA'] as XToken).address
             : this.hubProvider.chainConfig.addresses.xSoda;
         invariant(targetToken, 'Target token not found');
 
-        if (isEvmSpokeProviderType(spokeProvider) || isSonicSpokeProviderType(spokeProvider)) {
-          const spender = isHubSpokeProvider(spokeProvider, this.hubProvider)
-            ? await HubService.getUserRouter(
-                walletAddress as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-                this.hubProvider,
-              )
-            : spokeProvider.chainConfig.addresses.assetManager;
+        if (isEvmSpokeOnlyChainKeyType(params.srcChainKey) || isHubChainKeyType(params.srcChainKey)) {
+          invariant(
+            isOptionalEvmWalletProviderType(_params.walletProvider),
+            'Invalid wallet provider. Expected Evm wallet provider.',
+          );
 
-          const result = (await Erc20Service.approve(
-            targetToken as GetAddressType<EvmSpokeProviderType>,
-            params.amount,
-            spender as GetAddressType<EvmSpokeProviderType | SonicSpokeProviderType>,
-            spokeProvider,
-            raw,
-          )) satisfies TxReturnType<EvmSpokeProviderType, R> as TxReturnType<S, R>;
+          const spender = isHubChainKeyType(params.srcChainKey)
+            ? await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
+            : this.config.getChainConfig(params.srcChainKey).addresses.assetManager;
 
-          return {
-            ok: true,
-            value: result,
-          };
+          const coreParams = {
+            srcChainKey: params.srcChainKey,
+            token: targetToken as GetTokenAddressType<EvmSpokeOnlyChainKey | HubChainKey>,
+            amount: params.amount,
+            owner: params.srcAddress,
+            spender: spender,
+          } as const;
+
+          const result = await this.spoke.approve<HubChainKey | EvmSpokeOnlyChainKey, Raw>({
+            ...coreParams,
+            raw: _params.raw,
+            walletProvider: _params.walletProvider,
+          } as SpokeApproveParams<HubChainKey | EvmSpokeOnlyChainKey, Raw>);
+
+          if (!result.ok) return result;
+
+          return result satisfies Result<TxReturnType<HubChainKey | EvmSpokeOnlyChainKey, boolean>> as Result<
+            TxReturnType<K, Raw>
+          >;
         }
 
-        if (isStellarSpokeProviderType(spokeProvider)) {
-          const result = await StellarSpokeService.requestTrustline(targetToken, params.amount, spokeProvider, raw);
-          return {
-            ok: true,
-            value: result satisfies TxReturnType<StellarSpokeProviderType, R> as TxReturnType<S, R>,
-          };
+        if (isStellarChainKeyType(params.srcChainKey)) {
+          invariant(
+            isOptionalStellarWalletProviderType(_params.walletProvider),
+            'Invalid wallet provider. Expected Stellar wallet provider.',
+          );
+          const coreParams = {
+            srcChainKey: params.srcChainKey,
+            token: targetToken,
+            amount: params.amount,
+            owner: params.srcAddress,
+          } as const;
+
+          const result = await this.spoke.approve<StellarChainKey, boolean>(
+            _params.raw
+              ? {
+                  ...coreParams,
+                  raw: true,
+                }
+              : {
+                  ...coreParams,
+                  raw: false,
+                  walletProvider: _params.walletProvider,
+                },
+          );
+
+          if (!result.ok) return result;
+
+          return result satisfies Result<TxReturnType<StellarChainKey, boolean>> as Result<TxReturnType<K, Raw>>;
         }
       }
 
-      // For non-EVM chains, approval is not needed
       return {
         ok: false,
-        error: {
-          code: 'APPROVAL_FAILED',
-          error: new Error(
-            'Approval only supported for EVM spoke chains and [stake, unstake, instantUnstake] operations',
-          ),
-        },
+        error: new Error(
+          'Approval only supported for EVM spoke chains and [stake, unstake, instantUnstake] operations',
+        ),
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'APPROVAL_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Execute stake transaction for staking SODA tokens to receive xSoda shares
-   * NOTE: For EVM chains, you may need to approve token spending first using the approve method
-   * @param params - The staking parameters
-   * @param spokeProvider - The spoke provider
-   * @param timeout - The timeout in milliseconds for the transaction (default: DEFAULT_RELAY_TX_TIMEOUT)
-   * @returns Promise<Result<[SpokeTxHash, HubTxHash], StakingError<'STAKE_FAILED'> | RelayError>>
+   * Stakes SODA tokens from a spoke chain and relays the intent to the hub, waiting for confirmation.
+   *
+   * Internally calls `createStakeIntent` to submit on the spoke, then relays the cross-chain packet
+   * and waits for the hub transaction to land. For hub-chain callers the spoke and hub hashes are identical.
+   *
+   * Prerequisite: call `isAllowanceValid` + `approve` before staking on EVM chains.
+   *
+   * @param _params - Stake action params: source chain/address, SODA amount, minReceive slippage guard, and wallet provider.
+   * @returns `{ ok: true, value: { srcChainTxHash, dstChainTxHash } }` on success.
    */
-  public async stake(
-    params: StakeParams,
-    spokeProvider: SpokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  ): Promise<Result<[string, string], StakingError<'STAKE_FAILED'> | RelayError>> {
-    try {
-      const txResult = await this.createStakeIntent({ params, spokeProvider, raw: false });
+  public async stake<K extends SpokeChainKey>(_params: StakeAction<K, false>): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
 
-      if (!txResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'STAKE_FAILED',
-            error: txResult.error,
-          },
-        };
-      }
+    try {
+      const txResult = await this.createStakeIntent(_params);
+
+      if (!txResult.ok) return txResult;
 
       // verify the spoke tx hash exists on chain
-      const verifyTxHashResult = await SpokeService.verifyTxHash(txResult.value, spokeProvider);
+      const verifyTxHashResult = await this.spoke.verifyTxHash({
+        txHash: txResult.value.tx,
+        chainKey: params.srcChainKey,
+      });
 
-      if (!verifyTxHashResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'STAKE_FAILED',
-            error: verifyTxHashResult.error,
-          },
-        };
-      }
+      if (!verifyTxHashResult.ok) return verifyTxHashResult;
 
-      let hubTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          spokeProvider instanceof SolanaSpokeProvider
-            ? (txResult.data as { address: `0x${string}`; payload: `0x${string}` })
-            : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
           timeout,
-        );
+        });
 
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              error: packetResult.error,
-            },
-          };
-        }
+        if (!packetResult.ok) return packetResult;
         hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        hubTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, hubTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'STAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
+
   /**
-   * Create stake intent only (without relaying to hub)
-   * NOTE: This method only executes the transaction on the spoke chain and creates the stake intent
-   * In order to successfully stake tokens, you need to:
-   * 1. Check if the allowance is sufficient using isAllowanceValid
-   * 2. Approve the appropriate contract to spend the tokens using approve
-   * 3. Create the stake intent using this method
-   * 4. Relay the transaction to the hub and await completion using the stake method
+   * Submits the stake transaction on the spoke chain without relaying to the hub.
    *
-   * @param params - The stake parameters including amount and account
-   * @param spokeProvider - The spoke provider for the source chain
-   * @param raw - Whether to return the raw transaction data (default: false)
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'STAKE_FAILED'>> & { data?: { address: string; payload: Hex } }>
+   * Encodes the full stake call sequence via `buildStakeData` and invokes the spoke deposit.
+   * Returns both the spoke transaction result and the relay data needed to forward the intent
+   * to the hub in a subsequent step.
+   *
+   * Use this when you need fine-grained control over the relay step. For the complete end-to-end
+   * flow (spoke + relay + hub confirmation), use `stake` instead.
+   *
+   * @param _params - Stake action params; set `raw: true` to receive ABI-encoded call data instead of broadcasting.
+   * @returns `IntentTxResult` containing the spoke tx result and `relayData` (hub wallet address + encoded payload).
    */
-  async createStakeIntent<S extends SpokeProviderType = SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: StakeParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'STAKE_FAILED'>> & { data?: { address: string; payload: Hex } }
-  > {
+  async createStakeIntent<K extends SpokeChainKey, Raw extends boolean>(
+    _params: StakeAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params, skipSimulation } = _params;
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const sodaToken = spokeProvider.chainConfig.supportedTokens.SODA as XToken;
+      const sodaToken = this.config.sodaxConfig.chains[params.srcChainKey].supportedTokens.SODA as XToken;
       invariant(sodaToken, 'SODA token not found');
-      const sodaAsset = this.configService.getHubAssetInfo(spokeProvider.chainConfig.chain.id, sodaToken.address);
+      const sodaAsset = this.config.getSpokeTokenFromOriginalAssetAddress(params.srcChainKey, sodaToken.address);
       invariant(sodaAsset, 'SODA asset not found');
 
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
+      const hubWallet = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
 
       const data: Hex = this.buildStakeData(sodaAsset, hubWallet, params);
 
-      const txResult = await SpokeService.deposit(
-        {
-          from: walletAddress,
-          to: hubWallet,
-          token: sodaToken.address,
-          amount: params.amount,
-          data,
-        } as unknown as GetSpokeDepositParamsType<S>,
-        spokeProvider,
-        this.hubProvider,
-        raw,
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        to: hubWallet,
+        token: sodaToken.address as GetTokenAddressType<K>,
+        amount: params.amount,
+        data,
+        skipSimulation,
+      } as const;
+
+      const txResult = await this.spoke.deposit(
+        _params.raw
+          ? {
+              ...coreParams,
+              raw: true,
+            }
+          : {
+              ...coreParams,
+              raw: false,
+              walletProvider: _params.walletProvider as GetWalletProviderType<K>,
+            },
       );
+
+      if (!txResult.ok) {
+        console.error(txResult.error);
+        return txResult;
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: hubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, Raw> as TxReturnType<K, Raw>,
+          relayData: { address: hubWallet, payload: data },
         },
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'STAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Build stake data using StakingRouter (simplified flow)
-   * @param sodaAsset - The SODA asset information
-   * @param to - The destination address
-   * @param params - The staking parameters
-   * @returns The encoded contract call data
+   * Encodes the multi-call hub payload for a stake operation via the StakingRouter.
+   *
+   * The encoded sequence is:
+   * 1. ERC-20 approve of the hub SODA asset to the xSoda vault
+   * 2. ERC-4626 deposit of SODA into the xSoda vault
+   * 3. ERC-20 approve of xSoda to the StakingRouter
+   * 4. StakingRouter.stake to deliver xSoda shares to the hub wallet
+   *
+   * @param sodaAsset - Full xToken descriptor for SODA on the spoke chain (provides vault and hub-asset addresses).
+   * @param to - Hub wallet address that will receive the resulting xSoda shares.
+   * @param params - Stake params carrying the SODA amount and minReceive slippage guard.
+   * @returns ABI-encoded batch call payload to be forwarded to the hub.
    */
-  public buildStakeData(sodaAsset: HubAssetInfo, to: Address, params: StakeParams): Hex {
-    const hubConfig = getHubChainConfig();
+  public buildStakeData(sodaAsset: XToken, to: Address, params: StakeParams<SpokeChainKey>): Hex {
+    const hubConfig = this.config.getHubChainConfig();
     const sodaVault = sodaAsset.vault;
     const stakingRouter = hubConfig.addresses.stakingRouter;
 
     const calls: EvmContractCall[] = [];
-    calls.push(Erc20Service.encodeApprove(sodaAsset.asset, sodaVault, params.amount));
-    calls.push(EvmVaultTokenService.encodeDeposit(sodaVault, sodaAsset.asset, params.amount));
-    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(sodaAsset.decimal, params.amount);
+    calls.push(Erc20Service.encodeApprove(sodaAsset.hubAsset, sodaVault, params.amount));
+    calls.push(EvmVaultTokenService.encodeDeposit(sodaVault, sodaAsset.hubAsset, params.amount));
+    const translatedAmount = EvmVaultTokenService.translateIncomingDecimals(sodaAsset.decimals, params.amount);
     calls.push(Erc20Service.encodeApprove(sodaVault, stakingRouter, translatedAmount));
     calls.push(StakingLogic.encodeStakingRouterStake(stakingRouter, translatedAmount, to, params.minReceive));
     return encodeContractCalls(calls);
   }
 
   /**
-   * Execute unstake transaction for unstaking xSoda shares
-   * @param params - The unstaking parameters
-   * @param spokeProvider - The spoke provider
-   * @param timeout - The timeout in milliseconds for the transaction (default: DEFAULT_RELAY_TX_TIMEOUT)
-   * @returns Promise<Result<[SpokeTxHash, HubTxHash], StakingError<'UNSTAKE_FAILED'> | RelayError>>
+   * Initiates an unstake request for xSoda shares and relays the intent to the hub.
+   *
+   * Unstaking begins a waiting period. The user receives SODA only after calling `claim` once
+   * the period elapses. Early claims incur a penalty (see `getStakingConfig`). For immediate
+   * redemption without a waiting period, use `instantUnstake` instead.
+   *
+   * Prerequisite: call `isAllowanceValid` + `approve` before unstaking on EVM chains.
+   *
+   * @param _params - Unstake action params: source chain/address, xSoda amount, and wallet provider.
+   * @returns `{ ok: true, value: { srcChainTxHash, dstChainTxHash } }` on success.
    */
-  public async unstake(
-    params: UnstakeParams,
-    spokeProvider: SpokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  ): Promise<Result<[string, string], StakingError<'UNSTAKE_FAILED'> | RelayError>> {
+  public async unstake<K extends SpokeChainKey>(_params: UnstakeAction<K, false>): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.createUnstakeIntent({ params, spokeProvider, raw: false });
+      const txResult = await this.createUnstakeIntent(_params);
 
-      if (!txResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'UNSTAKE_FAILED',
-            error: txResult.error,
-          },
-        };
-      }
+      if (!txResult.ok) return txResult;
 
-      let hubTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          spokeProvider instanceof SolanaSpokeProvider
-            ? (txResult.data as { address: `0x${string}`; payload: `0x${string}` })
-            : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
           timeout,
-        );
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              error: packetResult.error,
-            },
-          };
-        }
+        });
+        if (!packetResult.ok) return packetResult;
         hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        hubTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, hubTxHash ?? ''] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Create unstake intent only (without relaying to hub)
-   * NOTE: This method only executes the transaction on the spoke chain and creates the unstake intent
-   * In order to successfully unstake tokens, you need to:
-   * 1. Check if the allowance is sufficient using isAllowanceValid
-   * 2. Approve the appropriate contract to spend the tokens using approve
-   * 3. Create the unstake intent using this method
-   * 4. Relay the transaction to the hub and await completion using the unstake method
+   * Submits the unstake transaction on the spoke chain without relaying to the hub.
    *
-   * @param params - The unstake parameters including amount and account
-   * @param spokeProvider - The spoke provider for the source chain
-   * @param raw - Whether to return the raw transaction data (default: false)
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }>
+   * Converts the xSoda share amount to its underlying SODA value on-chain, then encodes and
+   * sends the `sendMessage` spoke transaction carrying the hub payload built by `buildUnstakeData`.
+   *
+   * Use this when you need manual control over the relay step. For the full end-to-end flow use `unstake`.
+   *
+   * @param _params - Unstake action params; set `raw: true` to receive ABI-encoded call data instead of broadcasting.
+   * @returns `IntentTxResult` containing the spoke tx result and `relayData` (hub wallet address + encoded payload).
    */
-  async createUnstakeIntent<S extends SpokeProviderType = SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: UnstakeParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }
-  > {
+  async createUnstakeIntent<K extends SpokeChainKey, Raw extends boolean>(
+    _params: UnstakeAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params } = _params;
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
-
       const xSoda = this.hubProvider.chainConfig.addresses.xSoda;
-      const underlyingSodaAmount = await StakingLogic.convertXSodaSharesToSoda(
-        xSoda,
-        params.amount,
-        this.hubProvider.publicClient,
-      );
+      const [hubWallet, underlyingSodaAmount] = await Promise.all([
+        this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey),
+        StakingLogic.convertXSodaSharesToSoda(xSoda, params.amount, this.hubProvider.publicClient),
+      ]);
       const data: Hex = this.buildUnstakeData(hubWallet, params, xSoda, underlyingSodaAmount);
 
-      const txResult = await SpokeService.callWallet(hubWallet, data, spokeProvider, this.hubProvider, raw);
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        dstChainKey: this.hubProvider.chainConfig.chain.key,
+        dstAddress: hubWallet,
+        payload: data,
+      } as const;
+
+      const txResult = await this.spoke.sendMessage(
+        _params.raw
+          ? ({
+              ...coreParams,
+              raw: true,
+            } satisfies SendMessageParams<K, true>)
+          : ({
+              ...coreParams,
+              raw: false,
+              walletProvider: _params.walletProvider,
+            } satisfies SendMessageParams<K, false>),
+      );
+
+      if (!txResult.ok) {
+        console.error(txResult.error);
+        return txResult;
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: hubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, Raw> as TxReturnType<K, Raw>,
+          relayData: { address: hubWallet, payload: data },
         },
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Build unstake data for unstaking xSoda shares
-   * @param hubWallet - The hub wallet address
-   * @param params - The unstake parameters
-   * @returns The encoded contract call data
+   * Encodes the multi-call hub payload for an unstake operation.
+   *
+   * The encoded sequence is:
+   * 1. xSoda ERC-4626 redeem — burns the xSoda shares and releases underlying SODA to the hub wallet
+   * 2. StakedSoda.unstake — places the SODA into an unstake request with a waiting period
+   *
+   * @param hubWallet - Hub wallet address that owns the xSoda shares and will hold the unstake request.
+   * @param params - Unstake params carrying the xSoda share amount.
+   * @param xSoda - Address of the xSoda ERC-4626 vault contract.
+   * @param underlyingSodaAmount - Pre-computed SODA equivalent of the xSoda shares (from `convertXSodaSharesToSoda`).
+   * @returns ABI-encoded batch call payload to be forwarded to the hub.
    */
-  public buildUnstakeData(
+  public buildUnstakeData<K extends SpokeChainKey>(
     hubWallet: Address,
-    params: UnstakeParams,
+    params: UnstakeParams<K>,
     xSoda: Address,
     underlyingSodaAmount: bigint,
   ): Hex {
-    const hubConfig = getHubChainConfig();
+    const hubConfig = this.config.getHubChainConfig();
     const stakedSoda = hubConfig.addresses.stakedSoda;
     const calls: EvmContractCall[] = [];
     calls.push(StakingLogic.encodeXSodaRedeem(xSoda, params.amount, hubWallet, hubWallet));
@@ -606,143 +644,143 @@ export class StakingService {
   }
 
   /**
-   * Execute instant unstake transaction for instantly unstaking xSoda shares
-   * @param params - The instant unstaking parameters
-   * @param spokeProvider - The spoke provider
-   * @param timeout - The timeout in milliseconds for the transaction (default: DEFAULT_RELAY_TX_TIMEOUT)
-   * @returns Promise<Result<[SpokeTxHash, HubTxHash], StakingError<'INSTANT_UNSTAKE_FAILED'> | RelayError>>
+   * Instantly redeems xSoda shares for SODA without a waiting period and relays the intent to the hub.
+   *
+   * Routes through the StakingRouter which provides immediate liquidity at the cost of slippage.
+   * Use `getInstantUnstakeRatio` to preview the SODA output before calling this method. For a
+   * delayed but penalty-free redemption, use `unstake` + `claim` instead.
+   *
+   * Prerequisite: call `isAllowanceValid` + `approve` before instant unstaking on EVM chains.
+   *
+   * @param _params - Instant unstake action params: source chain/address, xSoda amount, minAmount slippage guard, and wallet provider.
+   * @returns `{ ok: true, value: { srcChainTxHash, dstChainTxHash } }` on success.
    */
-  public async instantUnstake(
-    params: InstantUnstakeParams,
-    spokeProvider: SpokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  ): Promise<Result<[string, string], StakingError<'INSTANT_UNSTAKE_FAILED'> | RelayError>> {
+  public async instantUnstake<K extends SpokeChainKey>(
+    _params: InstantUnstakeAction<K, false>,
+  ): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.createInstantUnstakeIntent({ params, spokeProvider, raw: false });
+      const txResult = await this.createInstantUnstakeIntent(_params);
 
-      if (!txResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'INSTANT_UNSTAKE_FAILED',
-            error: txResult.error,
-          },
-        };
-      }
+      if (!txResult.ok) return txResult;
 
-      let hubTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          spokeProvider instanceof SolanaSpokeProvider
-            ? (txResult.data as { address: `0x${string}`; payload: `0x${string}` })
-            : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
           timeout,
-        );
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              error: packetResult.error,
-            },
-          };
-        }
+        });
+        if (!packetResult.ok) return packetResult;
         hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        hubTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, hubTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INSTANT_UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Create instant unstake intent only (without relaying to hub)
-   * NOTE: This method only executes the transaction on the spoke chain and creates the instant unstake intent
-   * In order to successfully instant unstake tokens, you need to:
-   * 1. Create the instant unstake intent using this method
-   * 2. Relay the transaction to the hub and await completion using the instantUnstake method
+   * Submits the instant-unstake transaction on the spoke chain without relaying to the hub.
    *
-   * @param params - The instant unstake parameters including amount, minAmount and account
-   * @param spokeProvider - The spoke provider for the source chain
-   * @param raw - Whether to return the raw transaction data (default: false)
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'INSTANT_UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }>
+   * Encodes and sends the `sendMessage` spoke transaction carrying the hub payload built by
+   * `buildInstantUnstakeData`. The StakingRouter will swap xSoda for SODA immediately on the hub
+   * and bridge the SODA back to the caller's source chain.
+   *
+   * Use this when you need manual control over the relay step. For the full end-to-end flow use `instantUnstake`.
+   *
+   * @param _params - Instant unstake action params; set `raw: true` to receive ABI-encoded call data instead of broadcasting.
+   * @returns `IntentTxResult` containing the spoke tx result and `relayData` (hub wallet address + encoded payload).
    */
-  async createInstantUnstakeIntent<S extends SpokeProviderType = SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: InstantUnstakeParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'INSTANT_UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }
-  > {
+  async createInstantUnstakeIntent<K extends SpokeChainKey, Raw extends boolean>(
+    _params: InstantUnstakeAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params } = _params;
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
+      const hubWallet = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
 
-      const sodaToken = spokeProvider.chainConfig.supportedTokens.SODA;
+      const sodaToken = this.hubProvider.chainConfig.supportedTokens.SODA;
       invariant(sodaToken, 'SODA token not found');
-      const sodaAsset = this.configService.getHubAssetInfo(spokeProvider.chainConfig.chain.id, sodaToken.address);
+      const sodaAsset = this.config.getSpokeTokenFromOriginalAssetAddress(params.srcChainKey, sodaToken.address);
       invariant(sodaAsset, 'SODA asset not found');
 
       const data = this.buildInstantUnstakeData(
         sodaAsset,
-        spokeProvider.chainConfig.chain.id,
-        encodeAddress(spokeProvider.chainConfig.chain.id, walletAddress),
+        params.srcChainKey,
+        encodeAddress(params.srcChainKey, params.srcAddress),
         params,
       );
 
-      const txResult = await SpokeService.callWallet(hubWallet, data, spokeProvider, this.hubProvider, raw);
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        dstChainKey: this.hubProvider.chainConfig.chain.key,
+        dstAddress: hubWallet,
+        payload: data,
+      } as const;
+
+      const sendMessageParams = _params.raw
+        ? ({
+            ...coreParams,
+            raw: true,
+          } satisfies SendMessageParams<K, true>)
+        : ({
+            ...coreParams,
+            raw: false,
+            walletProvider: _params.walletProvider,
+          } satisfies SendMessageParams<K, false>);
+
+      const txResult = await this.spoke.sendMessage(sendMessageParams);
+
+      if (!txResult.ok) {
+        console.error(txResult.error);
+        return txResult;
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: hubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, boolean> as TxReturnType<K, Raw>,
+          relayData: { address: hubWallet, payload: data },
         },
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'INSTANT_UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Build instant unstake data for instantly unstaking xSoda shares
-   * @param sodaAsset - The SODA asset information
-   * @param dstChainId - The destination chain ID
-   * @param dstWallet - The destination wallet address
-   * @param params - The instant unstake parameters
-   * @returns The encoded contract call data
+   * Encodes the multi-call hub payload for an instant-unstake operation via the StakingRouter.
+   *
+   * The encoded sequence is:
+   * 1. ERC-20 approve of xSoda to the StakingRouter
+   * 2. StakingRouter.unstake — swaps xSoda for SODA and bridges the proceeds to the destination chain/wallet
+   *
+   * @param sodaAsset - Full xToken descriptor for SODA (provides the hub asset address for the bridge leg).
+   * @param dstChainKey - Spoke chain key where the redeemed SODA should be delivered.
+   * @param dstWallet - ABI-encoded destination wallet address on the destination chain.
+   * @param params - Instant-unstake params carrying the xSoda amount and minAmount slippage guard.
+   * @returns ABI-encoded batch call payload to be forwarded to the hub.
    */
-  public buildInstantUnstakeData(
-    sodaAsset: HubAssetInfo,
-    dstChainId: SpokeChainId,
+  public buildInstantUnstakeData<K extends SpokeChainKey>(
+    sodaAsset: XToken,
+    dstChainKey: SpokeChainKey,
     dstWallet: Hex,
-    params: InstantUnstakeParams,
+    params: InstantUnstakeParams<K>,
   ): Hex {
-    const hubConfig = getHubChainConfig();
+    const hubConfig = this.config.getHubChainConfig();
     const stakingRouter = hubConfig.addresses.stakingRouter;
     const xSoda = hubConfig.addresses.xSoda;
 
@@ -753,8 +791,8 @@ export class StakingService {
         stakingRouter,
         params.amount,
         params.minAmount,
-        sodaAsset.asset,
-        getIntentRelayChainId(dstChainId),
+        sodaAsset.hubAsset,
+        getIntentRelayChainId(dstChainKey),
         dstWallet,
       ),
     );
@@ -763,152 +801,154 @@ export class StakingService {
   }
 
   /**
-   * Execute claim transaction for claiming unstaked tokens after the unstaking period
-   * @param params - The claim parameters
-   * @param spokeProvider - The spoke provider
-   * @param timeout - The timeout in milliseconds for the transaction (default: DEFAULT_RELAY_TX_TIMEOUT)
-   * @returns Promise<Result<[SpokeTxHash, HubTxHash], StakingError<'CLAIM_FAILED'> | RelayError>>
+   * Claims SODA from a fully-elapsed unstake request and relays the intent to the hub.
+   *
+   * Requires the unstaking period to have passed. For early claims (where a penalty applies)
+   * consider using `getUnstakingInfoWithPenalty` first to preview the claimable amount.
+   *
+   * @param _params - Claim action params: source chain/address, requestId, claimable SODA amount, and wallet provider.
+   * @returns `{ ok: true, value: { srcChainTxHash, dstChainTxHash } }` on success.
    */
-  public async claim(
-    params: ClaimParams,
-    spokeProvider: SpokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  ): Promise<Result<[string, string], StakingError<'CLAIM_FAILED'> | RelayError>> {
+  public async claim<K extends SpokeChainKey>(_params: ClaimAction<K, false>): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.createClaimIntent({ params, spokeProvider, raw: false });
+      const txResult = await this.createClaimIntent(_params);
 
-      if (!txResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'CLAIM_FAILED',
-            error: txResult.error,
-          },
-        };
-      }
+      if (!txResult.ok) return txResult;
 
-      let hubTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          spokeProvider instanceof SolanaSpokeProvider
-            ? (txResult.data as { address: `0x${string}`; payload: `0x${string}` })
-            : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
           timeout,
-        );
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              error: packetResult.error,
-            },
-          };
-        }
+        });
+        if (!packetResult.ok) return packetResult;
         hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        hubTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, hubTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'CLAIM_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Create claim intent only (without relaying to hub)
-   * NOTE: This method only executes the transaction on the spoke chain and creates the claim intent
-   * In order to successfully claim tokens, you need to:
-   * 1. Create the claim intent using this method
-   * 2. Relay the transaction to the hub and await completion using the claim method
+   * Submits the claim transaction on the spoke chain without relaying to the hub.
    *
-   * @param params - The claim parameters including requestId
-   * @param spokeProvider - The spoke provider for the source chain
-   * @param raw - Whether to return the raw transaction data (default: false)
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'CLAIM_FAILED'>> & { data?: { address: string; payload: Hex } }>
+   * Encodes and sends the `sendMessage` spoke transaction carrying the hub payload built by
+   * `buildClaimData`. The hub will release the SODA and bridge it back to the caller's chain.
+   *
+   * Use this when you need manual control over the relay step. For the full end-to-end flow use `claim`.
+   *
+   * @param _params - Claim action params; set `raw: true` to receive ABI-encoded call data instead of broadcasting.
+   * @returns `IntentTxResult` containing the spoke tx result and `relayData` (hub wallet address + encoded payload).
    */
-  async createClaimIntent<S extends SpokeProviderType = SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: ClaimParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'CLAIM_FAILED'>> & { data?: { address: string; payload: Hex } }
-  > {
+  async createClaimIntent<K extends SpokeChainKey, Raw extends boolean>(
+    _params: ClaimAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params } = _params;
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
+      const hubWallet = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
 
-      const sodaToken = spokeProvider.chainConfig.supportedTokens.SODA as XToken;
+      const sodaToken = this.config.sodaxConfig.chains[params.srcChainKey].supportedTokens.SODA as XToken;
       invariant(sodaToken, 'SODA token not found');
-      const sodaAsset = this.configService.getHubAssetInfo(spokeProvider.chainConfig.chain.id, sodaToken.address);
+      const sodaAsset = this.config.getSpokeTokenFromOriginalAssetAddress(params.srcChainKey, sodaToken.address);
       invariant(sodaAsset, 'SODA asset not found');
 
       const data: Hex = this.buildClaimData(
         sodaAsset,
-        spokeProvider.chainConfig.chain.id,
-        encodeAddress(spokeProvider.chainConfig.chain.id, walletAddress),
+        params.srcChainKey,
+        encodeAddress(params.srcChainKey, params.srcAddress),
         params,
       );
 
-      const txResult = await SpokeService.callWallet(hubWallet, data, spokeProvider, this.hubProvider, raw);
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        dstChainKey: this.hubProvider.chainConfig.chain.key,
+        dstAddress: hubWallet,
+        payload: data,
+      } as const;
+
+      const sendMessageParams = _params.raw
+        ? ({
+            ...coreParams,
+            raw: true,
+          } satisfies SendMessageParams<K, true>)
+        : ({
+            ...coreParams,
+            raw: false,
+            walletProvider: _params.walletProvider,
+          } satisfies SendMessageParams<K, false>);
+
+      const txResult = await this.spoke.sendMessage(sendMessageParams);
+
+      if (!txResult.ok) {
+        console.error(txResult.error);
+        return txResult;
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: hubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, Raw> as TxReturnType<K, Raw>,
+          relayData: { address: hubWallet, payload: data },
         },
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'CLAIM_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Build claim data for claiming unstaked tokens
-   * @param sodaAsset - The SODA asset information
-   * @param dstChainId - The destination chain ID
-   * @param dstWallet - The destination wallet address
-   * @param params - The claim parameters
-   * @returns The encoded contract call data
+   * Encodes the multi-call hub payload for a claim operation.
+   *
+   * The encoded sequence is:
+   * 1. StakedSoda.claim — finalises the unstake request and releases underlying SODA
+   * 2. SODA vault token withdraw — unwraps the SODA hub asset from its vault token wrapper
+   * 3. Transfer of the claimable SODA to the destination wallet:
+   *    - Same-chain (hub): plain ERC-20 transfer
+   *    - Cross-chain (spoke): asset-manager bridge transfer
+   *
+   * @param sodaAsset - Full xToken descriptor for SODA (provides vault and hub-asset addresses).
+   * @param dstChainKey - Spoke chain key where the claimed SODA should be delivered.
+   * @param dstWallet - ABI-encoded destination wallet address on the destination chain.
+   * @param params - Claim params carrying the requestId and the pre-computed claimable SODA amount.
+   * @returns ABI-encoded batch call payload to be forwarded to the hub.
    */
-  public buildClaimData(sodaAsset: HubAssetInfo, dstChainId: SpokeChainId, dstWallet: Hex, params: ClaimParams): Hex {
-    const hubConfig = getHubChainConfig();
+  public buildClaimData<K extends SpokeChainKey>(
+    sodaAsset: XToken,
+    dstChainKey: SpokeChainKey,
+    dstWallet: Hex,
+    params: ClaimParams<K>,
+  ): Hex {
+    const hubConfig = this.config.getHubChainConfig();
     const stakedSoda = hubConfig.addresses.stakedSoda;
     const sodaVault = sodaAsset.vault;
     const calls: EvmContractCall[] = [];
     calls.push(StakingLogic.encodeClaim(stakedSoda, params.requestId));
     // Transfer the claimable amount to the destination wallet
-    calls.push(EvmVaultTokenService.encodeWithdraw(sodaVault, sodaAsset.asset, params.amount));
-    const translatedAmountOut = EvmVaultTokenService.translateOutgoingDecimals(sodaAsset.decimal, params.amount);
+    calls.push(EvmVaultTokenService.encodeWithdraw(sodaVault, sodaAsset.hubAsset, params.amount));
+    const translatedAmountOut = EvmVaultTokenService.translateOutgoingDecimals(sodaAsset.decimals, params.amount);
 
-    if (dstChainId === this.hubProvider.chainConfig.chain.id) {
-      calls.push(Erc20Service.encodeTransfer(sodaAsset.asset, dstWallet, translatedAmountOut));
+    if (dstChainKey === this.hubProvider.chainConfig.chain.key) {
+      calls.push(Erc20Service.encodeTransfer(sodaAsset.hubAsset, dstWallet, translatedAmountOut));
     } else {
       calls.push(
         EvmAssetManagerService.encodeTransfer(
-          sodaAsset.asset,
+          sodaAsset.hubAsset,
           dstWallet,
           translatedAmountOut,
           this.hubProvider.chainConfig.addresses.assetManager,
@@ -920,125 +960,128 @@ export class StakingService {
   }
 
   /**
-   * Execute cancel unstake transaction for cancelling an unstake request
-   * @param params - The cancel unstake parameters
-   * @param spokeProvider - The spoke provider
-   * @param timeout - The timeout in milliseconds for the transaction (default: DEFAULT_RELAY_TX_TIMEOUT)
-   * @returns Promise<Result<[SpokeTxHash, HubTxHash], StakingError<'CANCEL_UNSTAKE_FAILED'> | RelayError>>
+   * Cancels a pending unstake request and re-stakes the underlying SODA as xSoda shares.
+   *
+   * Aborts the waiting period and redeposits the SODA back into the xSoda vault so the user
+   * continues earning staking rewards. The re-staked xSoda is credited to the hub wallet.
+   *
+   * @param _params - Cancel-unstake action params: source chain/address, requestId, and wallet provider.
+   * @returns `{ ok: true, value: { srcChainTxHash, dstChainTxHash } }` on success.
    */
-  public async cancelUnstake(
-    params: CancelUnstakeParams,
-    spokeProvider: SpokeProvider,
-    timeout = DEFAULT_RELAY_TX_TIMEOUT,
-  ): Promise<Result<[string, string], StakingError<'CANCEL_UNSTAKE_FAILED'> | RelayError>> {
+  public async cancelUnstake<K extends SpokeChainKey>(
+    _params: CancelUnstakeAction<K, false>,
+  ): Promise<Result<TxHashPair>> {
+    const { params, timeout } = _params;
     try {
-      const txResult = await this.createCancelUnstakeIntent({ params, spokeProvider, raw: false });
+      const txResult = await this.createCancelUnstakeIntent(_params);
 
-      if (!txResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'CANCEL_UNSTAKE_FAILED',
-            error: txResult.error,
-          },
-        };
-      }
+      if (!txResult.ok) return txResult;
 
-      let hubTxHash: string | null = null;
-      if (!isHubSpokeProvider(spokeProvider, this.hubProvider)) {
-        const packetResult = await relayTxAndWaitPacket(
-          txResult.value,
-          spokeProvider instanceof SolanaSpokeProvider
-            ? (txResult.data as { address: `0x${string}`; payload: `0x${string}` })
-            : undefined,
-          spokeProvider,
-          this.relayerApiEndpoint,
+      let hubTxHash: string;
+      if (!isHubChainKeyType(params.srcChainKey)) {
+        const packetResult = await relayTxAndWaitPacket({
+          srcTxHash: txResult.value.tx,
+          data: txResult.value.relayData,
+          chainKey: params.srcChainKey,
+          relayerApiEndpoint: this.relayerApiEndpoint,
           timeout,
-        );
-        if (!packetResult.ok) {
-          return {
-            ok: false,
-            error: {
-              code: packetResult.error.code,
-              error: packetResult.error,
-            },
-          };
-        }
+        });
+
+        if (!packetResult.ok) return packetResult;
         hubTxHash = packetResult.value.dst_tx_hash;
       } else {
-        hubTxHash = txResult.value;
+        hubTxHash = txResult.value.tx;
       }
 
-      return { ok: true, value: [txResult.value, hubTxHash] };
+      return { ok: true, value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: hubTxHash } };
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'CANCEL_UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Create cancel unstake intent only (without relaying to hub)
-   * NOTE: This method only executes the transaction on the spoke chain and creates the cancel unstake intent
-   * In order to successfully cancel an unstake request, you need to:
-   * 1. Create the cancel unstake intent using this method
-   * 2. Relay the transaction to the hub and await completion using the cancelUnstake method
+   * Submits the cancel-unstake transaction on the spoke chain without relaying to the hub.
    *
-   * @param params - The cancel unstake parameters including requestId
-   * @param spokeProvider - The spoke provider for the source chain
-   * @param raw - Whether to return the raw transaction data (default: false)
-   * @returns Promise<Result<TxReturnType<S, R>, StakingError<'CANCEL_UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }>
+   * Encodes and sends the `sendMessage` spoke transaction carrying the hub payload built by
+   * `buildCancelUnstakeData`. The hub will abort the unstake request and redeposit the SODA as xSoda.
+   *
+   * Use this when you need manual control over the relay step. For the full end-to-end flow use `cancelUnstake`.
+   *
+   * @param _params - Cancel-unstake action params; set `raw: true` to receive ABI-encoded call data instead of broadcasting.
+   * @returns `IntentTxResult` containing the spoke tx result and `relayData` (hub wallet address + encoded payload).
    */
-  async createCancelUnstakeIntent<S extends SpokeProviderType = SpokeProviderType, R extends boolean = false>({
-    params,
-    spokeProvider,
-    raw,
-  }: Prettify<{ params: CancelUnstakeParams; spokeProvider: S; raw?: R }>): Promise<
-    Result<TxReturnType<S, R>, StakingError<'CANCEL_UNSTAKE_FAILED'>> & { data?: { address: string; payload: Hex } }
-  > {
+  async createCancelUnstakeIntent<K extends SpokeChainKey, Raw extends boolean>(
+    _params: CancelUnstakeAction<K, Raw>,
+  ): Promise<Result<IntentTxResult<K, Raw>>> {
+    const { params } = _params;
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
+      const hubWallet = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
 
       const data = await this.buildCancelUnstakeData(params, hubWallet);
-      const txResult = await SpokeService.callWallet(hubWallet, data, spokeProvider, this.hubProvider, raw);
+
+      const coreParams = {
+        srcAddress: params.srcAddress as GetAddressType<K>,
+        srcChainKey: params.srcChainKey,
+        dstChainKey: this.hubProvider.chainConfig.chain.key,
+        dstAddress: hubWallet,
+        payload: data,
+      } as const;
+
+      const sendMessageParams = _params.raw
+        ? ({
+            ...coreParams,
+            raw: true,
+          } satisfies SendMessageParams<K, true>)
+        : ({
+            ...coreParams,
+            raw: false,
+            walletProvider: _params.walletProvider,
+          } satisfies SendMessageParams<K, false>);
+
+      const txResult = await this.spoke.sendMessage(sendMessageParams);
+
+      if (!txResult.ok) {
+        console.error(txResult.error);
+        return txResult;
+      }
 
       return {
         ok: true,
-        value: txResult satisfies TxReturnType<S, R> as TxReturnType<S, R>,
-        data: {
-          address: hubWallet,
-          payload: data,
+        value: {
+          tx: txResult.value satisfies TxReturnType<K, Raw> as TxReturnType<K, Raw>,
+          relayData: { address: hubWallet, payload: data },
         },
       };
     } catch (error) {
       console.error(error);
       return {
         ok: false,
-        error: {
-          code: 'CANCEL_UNSTAKE_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Build cancel unstake data for cancelling an unstake request
-   * @param params - The cancel unstake parameters
-   * @param hubWallet - The hub wallet address
-   * @returns Promise<Hex> - The encoded contract call data
+   * Fetches the pending unstake request on-chain and encodes the hub payload to cancel it.
+   *
+   * The encoded sequence is:
+   * 1. StakedSoda.cancelUnstakeRequest — removes the unstake request and returns the SODA
+   * 2. ERC-20 approve of the returned SODA to the xSoda vault
+   * 3. xSoda ERC-4626 deposit — re-stakes the SODA as xSoda shares for the hub wallet
+   *
+   * @param params - Cancel-unstake params carrying the requestId used to look up the on-chain request.
+   * @param hubWallet - Hub wallet address that owns the unstake request and will receive the re-staked xSoda.
+   * @returns ABI-encoded batch call payload to be forwarded to the hub.
+   * @throws If no unstake request matching `params.requestId` exists for the hub wallet.
    */
-  public async buildCancelUnstakeData(params: CancelUnstakeParams, hubWallet: Address): Promise<Hex> {
-    const hubConfig = getHubChainConfig();
+  public async buildCancelUnstakeData<K extends SpokeChainKey>(
+    params: CancelUnstakeParams<K>,
+    hubWallet: Address,
+  ): Promise<Hex> {
+    const hubConfig = this.config.getHubChainConfig();
     const stakedSoda = hubConfig.addresses.stakedSoda;
     const xSoda = hubConfig.addresses.xSoda;
 
@@ -1064,43 +1107,47 @@ export class StakingService {
   }
 
   /**
-   * Get comprehensive staking information for a user using spoke provider
-   * @param spokeProvider - The spoke provider
-   * @returns Promise<Result<StakingInfo, StakingError<'INFO_FETCH_FAILED'>>>
+   * Fetches comprehensive staking information for a user identified by their spoke-chain address.
+   *
+   * Resolves the hub wallet address from the spoke address, then delegates to `getStakingInfo`.
+   *
+   * @param srcAddress - The user's wallet address on the source spoke chain.
+   * @param srcChainKey - The spoke chain the user is operating from.
+   * @returns `StakingInfo` containing total vault assets and the user's xSoda balance and SODA equivalent.
    */
-  public async getStakingInfoFromSpoke(
-    spokeProvider: SpokeProviderType,
-  ): Promise<Result<StakingInfo, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getStakingInfoFromSpoke<K extends SpokeChainKey>(
+    srcAddress: Address,
+    srcChainKey: K,
+  ): Promise<Result<StakingInfo>> {
     try {
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-      const hubWallet = await HubService.getUserHubWalletAddress(
-        walletAddress,
-        spokeProvider.chainConfig.chain.id,
-        this.hubProvider,
-      );
+      const hubWallet = await this.hubProvider.getUserHubWalletAddress(srcAddress, srcChainKey);
 
       return this.getStakingInfo(hubWallet);
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get comprehensive staking information for a user
-   * @param userAddress - The user's address
-   * @returns Promise<Result<StakingInfo, StakingError<'INFO_FETCH_FAILED'>>>
+   * Fetches comprehensive staking information for a hub wallet address.
+   *
+   * Makes two parallel on-chain reads against the xSoda vault:
+   * - Total SODA assets held by the vault (`totalAssets`)
+   * - The user's raw xSoda share balance
+   *
+   * Then converts the user's share balance to its underlying SODA value.
+   *
+   * @param userAddress - The user's hub wallet address (not the spoke address).
+   * @returns `StakingInfo` with `totalStaked`, `totalUnderlying`, `userXSodaBalance`, `userXSodaValue`, and `userUnderlying`.
    */
-  public async getStakingInfo(userAddress: Address): Promise<Result<StakingInfo, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getStakingInfo(userAddress: Address): Promise<Result<StakingInfo>> {
     try {
       invariant(userAddress, 'User address is required');
 
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const xSoda = hubConfig.addresses.xSoda;
 
       const [totalUnderlying, userXSodaShares] = await Promise.all([
@@ -1128,36 +1175,29 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get unstaking information for a user
-   * @param param - The user's address or spoke provider
-   * @returns Promise<Result<UnstakingInfo, StakingError<'INFO_FETCH_FAILED'>>>
+   * Fetches all pending unstake requests and the total SODA amount currently unstaking for a user.
+   *
+   * Resolves the hub wallet from the spoke address and reads all `UserUnstakeInfo` records from
+   * the StakedSoda contract. Also sums the individual request amounts into `totalUnstaking`.
+   *
+   * @param srcAddress - The user's wallet address on the source spoke chain.
+   * @param srcChainKey - The spoke chain the user is operating from.
+   * @returns `UnstakingInfo` with the list of raw unstake requests and their aggregate SODA amount.
    */
-  public async getUnstakingInfo(
-    param: SpokeProviderType | Address,
-  ): Promise<Result<UnstakingInfo, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getUnstakingInfo<K extends SpokeChainKey>(
+    srcAddress: Address,
+    srcChainKey: K,
+  ): Promise<Result<UnstakingInfo>> {
     try {
-      let userAddress: Address;
-      if (typeof param === 'string') {
-        userAddress = param;
-      } else {
-        const walletAddress = await param.walletProvider.getWalletAddress();
-        userAddress = await HubService.getUserHubWalletAddress(
-          walletAddress,
-          param.chainConfig.chain.id,
-          this.hubProvider,
-        );
-      }
+      const userAddress = await this.hubProvider.getUserHubWalletAddress(srcAddress, srcChainKey);
 
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const stakedSoda = hubConfig.addresses.stakedSoda;
 
       // Get user's unstake requests
@@ -1180,21 +1220,24 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get staking configuration from the stakedSoda contract
-   * @returns Promise<Result<StakingConfig, StakingError<'INFO_FETCH_FAILED'>>>
+   * Reads the current staking configuration from the StakedSoda contract.
+   *
+   * Returns the three parameters that govern the unstaking penalty model:
+   * - `unstakingPeriod` — full wait duration in seconds; no penalty after this elapses
+   * - `minUnstakingPeriod` — minimum wait in seconds; max penalty applies before this elapses
+   * - `maxPenalty` — maximum penalty percentage (1–100)
+   *
+   * @returns `StakingConfig` with penalty-model parameters, all as `bigint` (seconds / percentage).
    */
-  public async getStakingConfig(): Promise<Result<StakingConfig, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getStakingConfig(): Promise<Result<StakingConfig>> {
     try {
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const stakedSoda = hubConfig.addresses.stakedSoda;
 
       // Read all configuration values in a single contract call
@@ -1215,10 +1258,7 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
@@ -1237,7 +1277,7 @@ export class StakingService {
     if (timeElapsed < config.minUnstakingPeriod) {
       // Return max penalty if still in minimum period
       return {
-        penalty: (config.maxPenalty * 100n) / 100n, // Convert percentage to basis points
+        penalty: config.maxPenalty, // penalty stored as 0-100 percent; divided by 100 at usage sites
         penaltyPercentage: Number(config.maxPenalty),
       };
     }
@@ -1258,36 +1298,32 @@ export class StakingService {
     const penalty = (config.maxPenalty * (totalReductionPeriod - timeInReductionPeriod)) / totalReductionPeriod;
 
     return {
-      penalty: (penalty * 100n) / 100n, // Convert percentage to basis points
+      penalty, // penalty stored as 0-100 percent; divided by 100 at usage sites
       penaltyPercentage: Number(penalty),
     };
   }
 
   /**
-   * Get unstaking information with penalty calculations
-   * @param param - The user's address or spoke provider
-   * @returns Promise<Result<UnstakingInfo & { requestsWithPenalty: UnstakeRequestWithPenalty[] }, StakingError<'INFO_FETCH_FAILED'>>>
+   * Fetches all pending unstake requests enriched with current penalty calculations.
+   *
+   * Fetches `getUnstakingInfo` and `getStakingConfig` in parallel, then applies the linear penalty
+   * model to each request based on how much time has elapsed since the request started:
+   * - Before `minUnstakingPeriod`: `maxPenalty` applies in full
+   * - Between `minUnstakingPeriod` and `unstakingPeriod`: penalty decreases linearly to zero
+   * - After `unstakingPeriod`: no penalty
+   *
+   * @param srcAddress - The user's wallet address on the source spoke chain.
+   * @param srcChainKey - The spoke chain the user is operating from.
+   * @returns `UnstakingInfo` extended with `requestsWithPenalty` — each request annotated with
+   *   `penalty` (SODA withheld), `penaltyPercentage` (0–100), and `claimableAmount` (net SODA receivable).
    */
-  public async getUnstakingInfoWithPenalty(
-    param: SpokeProviderType | Address,
-  ): Promise<
-    Result<UnstakingInfo & { requestsWithPenalty: UnstakeRequestWithPenalty[] }, StakingError<'INFO_FETCH_FAILED'>>
-  > {
+  public async getUnstakingInfoWithPenalty<K extends SpokeChainKey>(
+    srcAddress: Address,
+    srcChainKey: K,
+  ): Promise<Result<UnstakingInfo & { requestsWithPenalty: UnstakeRequestWithPenalty[] }>> {
     try {
-      let userAddress: Address;
-      if (typeof param === 'string') {
-        userAddress = param;
-      } else {
-        const walletAddress = await param.walletProvider.getWalletAddress();
-        userAddress = await HubService.getUserHubWalletAddress(
-          walletAddress,
-          param.chainConfig.chain.id,
-          this.hubProvider,
-        );
-      }
-
       const [unstakingResult, configResult] = await Promise.all([
-        this.getUnstakingInfo(userAddress),
+        this.getUnstakingInfo(srcAddress, srcChainKey),
         this.getStakingConfig(),
       ]);
 
@@ -1295,15 +1331,7 @@ export class StakingService {
         return unstakingResult;
       }
 
-      if (!configResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: 'INFO_FETCH_FAILED',
-            error: configResult.error,
-          },
-        };
-      }
+      if (!configResult.ok) return configResult;
 
       const config = configResult.value;
       const requestsWithPenalty: UnstakeRequestWithPenalty[] = unstakingResult.value.userUnstakeSodaRequests.map(
@@ -1331,22 +1359,23 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get instant unstake ratio for a given amount
-   * @param amount - The amount of xSoda to estimate instant unstake for
-   * @returns Promise<Result<bigint, StakingError<'INFO_FETCH_FAILED'>>>
+   * Estimates the SODA amount receivable from instantly unstaking a given quantity of xSoda shares.
+   *
+   * Calls `StakingRouter.estimateInstantUnstake` on-chain. Use this before calling `instantUnstake`
+   * to set an appropriate `minAmount` slippage guard.
+   *
+   * @param amount - The number of xSoda shares to estimate the instant unstake for.
+   * @returns The estimated SODA output (before any transaction-level slippage), as a `bigint`.
    */
-  public async getInstantUnstakeRatio(amount: bigint): Promise<Result<bigint, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getInstantUnstakeRatio(amount: bigint): Promise<Result<bigint>> {
     try {
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const stakingRouter = hubConfig.addresses.stakingRouter;
 
       const ratio = await StakingLogic.estimateInstantUnstake(stakingRouter, amount, this.hubProvider.publicClient);
@@ -1358,22 +1387,23 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get converted assets amount for xSODA shares
-   * @param amount - The amount of xSoda shares to convert
-   * @returns Promise<Result<bigint, StakingError<'INFO_FETCH_FAILED'>>>
+   * Converts a quantity of xSoda shares to its current underlying SODA value.
+   *
+   * Delegates to the xSoda vault's `convertToAssets` view function. The result reflects the
+   * current exchange rate and will increase over time as staking rewards accrue to the vault.
+   *
+   * @param amount - The number of xSoda shares to convert.
+   * @returns The equivalent SODA asset amount at the current exchange rate.
    */
-  public async getConvertedAssets(amount: bigint): Promise<Result<bigint, StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getConvertedAssets(amount: bigint): Promise<Result<bigint>> {
     try {
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const xSoda = hubConfig.addresses.xSoda;
 
       const convertedAmount = await StakingLogic.convertXSodaSharesToSoda(xSoda, amount, this.hubProvider.publicClient);
@@ -1385,22 +1415,25 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }
 
   /**
-   * Get stake ratio for a given amount (xSoda amount and preview deposit)
-   * @param amount - The amount of SODA to estimate stake for
-   * @returns Promise<Result<[bigint, bigint], StakingError<'INFO_FETCH_FAILED'>>>
+   * Estimates the xSoda shares and preview-deposit amount for a given SODA input.
+   *
+   * Calls `StakingRouter.estimateXSodaAmount` on-chain, which accounts for vault fees and the
+   * current exchange rate. Use this to display expected output before a stake transaction.
+   *
+   * @param amount - The SODA amount the user intends to stake.
+   * @returns A tuple `[xSodaAmount, previewDepositAmount]`:
+   *   - `xSodaAmount`: estimated xSoda shares the user will receive
+   *   - `previewDepositAmount`: SODA amount as seen by the vault's `previewDeposit` function
    */
-  public async getStakeRatio(amount: bigint): Promise<Result<[bigint, bigint], StakingError<'INFO_FETCH_FAILED'>>> {
+  public async getStakeRatio(amount: bigint): Promise<Result<[bigint, bigint]>> {
     try {
-      const hubConfig = getHubChainConfig();
+      const hubConfig = this.config.getHubChainConfig();
       const stakingRouter = hubConfig.addresses.stakingRouter;
 
       const [xSodaAmount, previewDepositAmount] = await StakingLogic.estimateXSodaAmount(
@@ -1416,10 +1449,7 @@ export class StakingService {
     } catch (error) {
       return {
         ok: false,
-        error: {
-          code: 'INFO_FETCH_FAILED',
-          error: error,
-        },
+        error,
       };
     }
   }

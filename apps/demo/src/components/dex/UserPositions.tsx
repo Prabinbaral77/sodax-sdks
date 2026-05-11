@@ -1,6 +1,8 @@
 // apps/demo/src/components/dex/UserPositions.tsx
 import React, { type JSX, useEffect, useState } from 'react';
-import type { Hash, PoolData, PoolKey, SpokeProvider } from '@sodax/sdk';
+import type { Hash, PoolData, PoolKey } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
+import type { IWalletProvider } from '@sodax/wallet-sdk-react';
 import {
   createDecreaseLiquidityParamsProps,
   useDecreaseLiquidity,
@@ -25,19 +27,32 @@ type UserPositionsProps = Readonly<{
   userAddress: string;
   poolKey: PoolKey;
   poolData: PoolData;
-  spokeProvider: SpokeProvider;
+  chainKey: SpokeChainKey;
+  walletProvider: IWalletProvider;
 }>;
 
 type PositionListItemProps = Readonly<{
   tokenId: string;
   poolKey: PoolKey;
   poolData: PoolData;
-  spokeProvider: SpokeProvider;
+  chainKey: SpokeChainKey;
+  userAddress: string;
+  walletProvider: IWalletProvider;
 }>;
 
-function PositionListItem({ tokenId, poolKey, poolData, spokeProvider }: PositionListItemProps): JSX.Element | null {
+function PositionListItem({
+  tokenId,
+  poolKey,
+  poolData,
+  chainKey,
+  userAddress,
+  walletProvider,
+}: PositionListItemProps): JSX.Element | null {
+  const srcAddress = userAddress as `0x${string}`;
   const [percentageToRemove, setPercentageToRemove] = useState(0);
-  const { data, isLoading, isError, error: positionInfoError } = usePositionInfo({ tokenId, poolKey });
+  const { data, isLoading, isError, error: positionInfoError } = usePositionInfo({
+    params: { tokenId, poolKey },
+  });
   const claimRewardsMutation = useClaimRewards();
   const decreaseLiquidityMutation = useDecreaseLiquidity();
   const [error, setError] = useState<string>('');
@@ -79,12 +94,14 @@ function PositionListItem({ tokenId, poolKey, poolData, spokeProvider }: Positio
     try {
       await claimRewardsMutation.mutateAsync({
         params: {
+          srcChainKey: chainKey,
+          srcAddress,
           poolKey,
           tokenId: BigInt(tokenId),
           tickLower: BigInt(positionInfo.tickLower),
           tickUpper: BigInt(positionInfo.tickUpper),
         },
-        spokeProvider,
+        walletProvider,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Claim failed');
@@ -136,16 +153,18 @@ function PositionListItem({ tokenId, poolKey, poolData, spokeProvider }: Positio
     setError('');
 
     try {
+      const decreaseCore = createDecreaseLiquidityParamsProps({
+        poolKey,
+        tokenId,
+        percentage: percentageToRemove,
+        positionInfo,
+        slippageTolerance: 0.5,
+      });
+
       // NOTE: when removing 100% of liquidity unclaimed fees are supposedly included (double check)
       await decreaseLiquidityMutation.mutateAsync({
-        params: createDecreaseLiquidityParamsProps({
-          poolKey: poolKey,
-          tokenId: tokenId,
-          percentage: percentageToRemove,
-          positionInfo: positionInfo,
-          slippageTolerance: 0.5,
-        }),
-        spokeProvider,
+        params: { ...decreaseCore, srcChainKey: chainKey, srcAddress },
+        walletProvider,
       });
 
       // Clear percentage to remove
@@ -251,13 +270,18 @@ function PositionListItem({ tokenId, poolKey, poolData, spokeProvider }: Positio
   );
 }
 
-export function UserPositions({ userAddress, poolKey, poolData, spokeProvider }: UserPositionsProps): JSX.Element {
+export function UserPositions({
+  userAddress,
+  poolKey,
+  poolData,
+  chainKey,
+  walletProvider,
+}: UserPositionsProps): JSX.Element {
   const { sodax } = useSodaxContext();
   const [tokenIds, setTokenIds] = useState<string[]>([]);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   const [newTokenId, setNewTokenId] = useState<string>('');
   const [hubTxHashInput, setHubTxHashInput] = useState<string>('');
-  const selectedChainId = spokeProvider.chainConfig.chain.id;
 
   useEffect(() => {
     if (!userAddress) {
@@ -265,9 +289,9 @@ export function UserPositions({ userAddress, poolKey, poolData, spokeProvider }:
       setIsLoaded(true);
       return;
     }
-    setTokenIds(getTokenIdsFromLocalStorage(selectedChainId, userAddress));
+    setTokenIds(getTokenIdsFromLocalStorage(chainKey, userAddress));
     setIsLoaded(true);
-  }, [userAddress, selectedChainId]);
+  }, [userAddress, chainKey]);
 
   const isNewTokenIdValid = newTokenId.trim() !== '' && Number.isFinite(Number(newTokenId));
 
@@ -276,8 +300,8 @@ export function UserPositions({ userAddress, poolKey, poolData, spokeProvider }:
       return;
     }
     const trimmedTokenId = newTokenId.trim();
-    saveTokenIdToLocalStorage(userAddress, selectedChainId, trimmedTokenId);
-    setTokenIds(getTokenIdsFromLocalStorage(selectedChainId, userAddress));
+    saveTokenIdToLocalStorage(userAddress, chainKey, trimmedTokenId);
+    setTokenIds(getTokenIdsFromLocalStorage(chainKey, userAddress));
     setNewTokenId('');
   };
 
@@ -296,10 +320,14 @@ export function UserPositions({ userAddress, poolKey, poolData, spokeProvider }:
     }
 
     try {
-      const mintPositionEvent = await sodax.dex.clService.getMintPositionEvent(hubTxHashInput.trim() as Hash);
-      saveTokenIdToLocalStorage(userAddress, selectedChainId, mintPositionEvent.tokenId.toString());
+      const mintPositionEventResult = await sodax.dex.clService.getMintPositionEvent(hubTxHashInput.trim() as Hash);
+      if (!mintPositionEventResult.ok) {
+        globalThis.alert(`Find position ID failed: ${mintPositionEventResult.error instanceof Error ? mintPositionEventResult.error.message : 'Unknown error'}`);
+        return;
+      }
+      saveTokenIdToLocalStorage(userAddress, chainKey, mintPositionEventResult.value.tokenId.toString());
       setHubTxHashInput('');
-      globalThis.alert(`Position ID: ${mintPositionEvent.tokenId.toString()}`);
+      globalThis.alert(`Position ID: ${mintPositionEventResult.value.tokenId.toString()}`);
     } catch (err) {
       console.error('Find position ID failed:', err);
       globalThis.alert(`Find position ID failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -359,7 +387,9 @@ export function UserPositions({ userAddress, poolKey, poolData, spokeProvider }:
               tokenId={tokenId}
               poolKey={poolKey}
               poolData={poolData}
-              spokeProvider={spokeProvider}
+              chainKey={chainKey}
+              userAddress={userAddress}
+              walletProvider={walletProvider}
             />
           ))
         )}

@@ -1,64 +1,44 @@
-import type { MoneyMarketError, MoneyMarketRepayParams, RelayErrorCode, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
+// packages/dapp-kit/src/hooks/mm/useRepay.ts
+import type { MoneyMarketRepayActionParams, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
-interface RepayResponse {
-  ok: true;
-  value: [string, string];
-}
-
-export type UseRepayParams = {
-  params: MoneyMarketRepayParams;
-  spokeProvider: SpokeProvider;
-};
+/**
+ * Mutation variables for {@link useRepay}. Generic over `K extends SpokeChainKey` (defaults to
+ * the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
+ */
+export type UseRepayVars<K extends SpokeChainKey = SpokeChainKey> = Omit<MoneyMarketRepayActionParams<K, false>, 'raw'>;
 
 /**
  * React hook for repaying a borrow in the Sodax money market protocol.
  *
- * This hook encapsulates the process of sending a repay transaction to the money market.
- * It manages the asynchronous operation for repayment, including sending the transaction
- * and error handling.
- *
- * @returns {UseMutationResult<RepayResponse, MoneyMarketError<'CREATE_REPAY_INTENT_FAILED' | 'REPAY_UNKNOWN_ERROR' | RelayErrorCode>, UseRepayParams>} React Query mutation result object containing:
- *   - mutateAsync: (params: UseRepayParams) => Promise<RepayResponse>
- *     Initiates a repay transaction using the given MoneyMarketRepayParams and SpokeProvider.
- *   - isPending: boolean indicating if a transaction is in progress.
- *   - error: MoneyMarketError if an error occurred while repaying, otherwise undefined.
- *
- * @example
- * ```typescript
- * const { mutateAsync: repay, isPending, error } = useRepay();
- * await repay({ params: repayParams, spokeProvider });
- * ```
- *
- * @throws {Error} When:
- *   - `spokeProvider` is missing or invalid.
- *   - The underlying repay transaction fails.
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useRepay(): UseMutationResult<
-  RepayResponse,
-  MoneyMarketError<'CREATE_REPAY_INTENT_FAILED' | 'REPAY_UNKNOWN_ERROR' | RelayErrorCode>,
-  UseRepayParams
-> {
+export function useRepay<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseRepayVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseRepayVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<
-    RepayResponse,
-    MoneyMarketError<'CREATE_REPAY_INTENT_FAILED' | 'REPAY_UNKNOWN_ERROR' | RelayErrorCode>,
-    UseRepayParams
-  >({
-    mutationFn: async ({ params, spokeProvider }: UseRepayParams) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
-      }
-
-      const response = await sodax.moneyMarket.repay(params, spokeProvider);
-
-      if (!response.ok) {
-        throw response.error;
-      }
-
-      return response;
+  return useSafeMutation<TxHashPair, Error, UseRepayVars<K>>({
+    mutationKey: ['mm', 'repay'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.moneyMarket.repay({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['mm', 'userReservesData', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['mm', 'userFormattedSummary', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'aTokensBalances'] });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'allowance', params.srcChainKey, params.token, params.action] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

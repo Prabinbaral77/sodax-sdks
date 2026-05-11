@@ -1,48 +1,51 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { CreateIntentParams, CreateLimitOrderParams, SpokeProvider } from '@sodax/sdk';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { CreateIntentParams, CreateLimitOrderParams } from '@sodax/sdk';
+import type { GetWalletProviderType, SpokeChainKey } from '@sodax/sdk';
+import type { ReadHookParams } from '../shared/types.js';
 
-/**
- * Hook for checking token allowance for swap operations.
- *
- * This hook verifies if the user has approved enough tokens for a specific swap action.
- * It automatically queries and tracks the allowance status.
- *
- * @param {CreateIntentParams | CreateLimitOrderParams} params - The parameters for the intent to check allowance for.
- * @param {SpokeProvider} spokeProvider - The spoke provider to use for allowance checks
- *
- * @returns {UseQueryResult<boolean, Error>} A React Query result containing:
- *   - data: Boolean indicating if allowance is sufficient
- *   - isLoading: Loading state indicator
- *   - error: Any error that occurred during the check
- *
- * @example
- * ```typescript
- * const { data: hasAllowed, isLoading } = useSwapAllowance(params, spokeProvider);
- * ```
- */
-export function useSwapAllowance(
-  params: CreateIntentParams | CreateLimitOrderParams | undefined,
-  spokeProvider: SpokeProvider | undefined,
-): UseQueryResult<boolean, Error> {
+export type UseSwapAllowanceParams<K extends SpokeChainKey> = ReadHookParams<
+  boolean,
+  {
+    payload: CreateIntentParams | CreateLimitOrderParams | undefined;
+    srcChainKey: K | undefined;
+    walletProvider: GetWalletProviderType<K> | undefined;
+  }
+>;
+
+export function useSwapAllowance<K extends SpokeChainKey>({
+  params,
+  queryOptions,
+}: UseSwapAllowanceParams<K> = {}): UseQueryResult<boolean, Error> {
   const { sodax } = useSodaxContext();
+  const payload = params?.payload;
+  const srcChainKey = params?.srcChainKey;
+  const walletProvider = params?.walletProvider;
 
-  return useQuery({
-    queryKey: ['allowance', params],
+  return useQuery<boolean, Error>({
+    // Extract the (chain, owner, token, amount) tuple that actually scopes the allowance —
+    // raw-object keys break per Rule 4 (bigints) and churn on every render.
+    queryKey: [
+      'swap',
+      'allowance',
+      payload?.srcChainKey,
+      payload?.srcAddress,
+      payload?.inputToken,
+      payload?.inputAmount?.toString(),
+    ],
     queryFn: async () => {
-      if (!spokeProvider || !params) {
+      if (!srcChainKey || !walletProvider || !payload) {
         return false;
       }
       const allowance = await sodax.swaps.isAllowanceValid({
-        intentParams: params,
-        spokeProvider,
+        params: payload as CreateIntentParams,
+        raw: false,
+        walletProvider,
       });
-      if (allowance.ok) {
-        return allowance.value;
-      }
-      return false;
+      return allowance.ok ? allowance.value : false;
     },
-    enabled: !!spokeProvider && !!params,
+    enabled: !!srcChainKey && !!walletProvider && !!payload,
     refetchInterval: 2000,
+    ...queryOptions,
   });
 }

@@ -1,6 +1,8 @@
-import type { XAccount } from '@/types';
-import { detectBitcoinAddressType, type IBitcoinWalletProvider, type AddressType } from '@sodax/types';
-import { BitcoinXConnector } from './BitcoinXConnector';
+import type { XAccount } from '@/types/index.js';
+import { detectBitcoinAddressType, type IBitcoinWalletProvider, type BtcAddressType } from '@sodax/types';
+import type { BitcoinWalletDefaults } from '@sodax/wallet-sdk-core';
+import { WALLET_METADATA } from '@/constants.js';
+import { BitcoinXConnector } from './BitcoinXConnector.js';
 
 // Minimal Unisat window API types
 interface UnisatWallet {
@@ -19,12 +21,15 @@ declare global {
 }
 
 class UnisatWalletProvider implements IBitcoinWalletProvider {
+  readonly chainType = 'BITCOIN' as const;
   private unisat: UnisatWallet;
   private cachedAddress: string;
+  private readonly defaults: BitcoinWalletDefaults | undefined;
 
-  constructor(unisat: UnisatWallet, address: string) {
+  constructor(unisat: UnisatWallet, address: string, defaults?: BitcoinWalletDefaults) {
     this.unisat = unisat;
     this.cachedAddress = address;
+    this.defaults = defaults;
   }
 
   async getWalletAddress(): Promise<string> {
@@ -41,15 +46,16 @@ class UnisatWalletProvider implements IBitcoinWalletProvider {
     return this.unisat.getPublicKey();
   }
 
-  async getAddressType(_address: string): Promise<AddressType> {
+  async getAddressType(_address: string): Promise<BtcAddressType> {
     const address = await this.getWalletAddress();
     return detectBitcoinAddressType(address);
   }
 
-  async signTransaction(psbtBase64: string, finalize = false): Promise<string> {
+  async signTransaction(psbtBase64: string, finalize?: boolean): Promise<string> {
+    const effectiveFinalize = finalize ?? this.defaults?.defaultFinalize ?? false;
     // Convert base64 → hex for Unisat, then back
     const psbtHex = Buffer.from(psbtBase64, 'base64').toString('hex');
-    const signedHex = await this.unisat.signPsbt(psbtHex, { autoFinalized: finalize });
+    const signedHex = await this.unisat.signPsbt(psbtHex, { autoFinalized: effectiveFinalize });
     // Return as hex (BTCWalletProvider.signTransaction expects this)
     return signedHex;
   }
@@ -73,16 +79,24 @@ class UnisatWalletProvider implements IBitcoinWalletProvider {
 export class UnisatXConnector extends BitcoinXConnector {
   private walletProvider: UnisatWalletProvider | undefined;
 
-  constructor() {
-    super('Unisat', 'unisat');
+  constructor(defaults?: BitcoinWalletDefaults) {
+    super('Unisat', 'unisat', defaults);
   }
 
   public static isAvailable(): boolean {
     return typeof window !== 'undefined' && !!window.unisat;
   }
 
-  public get icon(): string {
-    return 'https://avatars.githubusercontent.com/u/125119198?s=200&v=4';
+  public override get isInstalled(): boolean {
+    return UnisatXConnector.isAvailable();
+  }
+
+  public override get installUrl(): string {
+    return WALLET_METADATA.unisat.installUrl;
+  }
+
+  public override get icon(): string {
+    return WALLET_METADATA.unisat.icon;
   }
 
   async connect(): Promise<XAccount | undefined> {
@@ -92,9 +106,12 @@ export class UnisatXConnector extends BitcoinXConnector {
 
     const accounts = await window.unisat.requestAccounts();
     const address = accounts[0];
-    if (!address) return undefined;
+    if (!address) {
+      console.warn('[UnisatXConnector] connect: requestAccounts returned no address');
+      return undefined;
+    }
 
-    this.walletProvider = new UnisatWalletProvider(window.unisat, address);
+    this.walletProvider = new UnisatWalletProvider(window.unisat, address, this.defaults);
 
     return {
       address,
@@ -112,6 +129,6 @@ export class UnisatXConnector extends BitcoinXConnector {
 
   recreateWalletProvider(xAccount: XAccount): IBitcoinWalletProvider | undefined {
     if (!window.unisat || !xAccount.address) return undefined;
-    return new UnisatWalletProvider(window.unisat, xAccount.address);
+    return new UnisatWalletProvider(window.unisat, xAccount.address, this.defaults);
   }
 }

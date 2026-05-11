@@ -1,67 +1,49 @@
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { MoneyMarketBorrowParams, MoneyMarketError, RelayErrorCode, SpokeProvider } from '@sodax/sdk';
-
-interface BorrowResponse {
-  ok: true;
-  value: [string, string];
-}
-
-export type UseBorrowParams = {
-  params: MoneyMarketBorrowParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/mm/useBorrow.ts
+import type { MoneyMarketBorrowActionParams, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * React hook for borrowing tokens in the Sodax money market protocol.
- *
- * Encapsulates the async process to initiate a borrow transaction via the money market,
- * handling transaction creation, submission, and cross-chain logic.
- *
- * @returns {UseMutationResult<
- *   BorrowResponse,
- *   MoneyMarketError<'CREATE_BORROW_INTENT_FAILED' | 'BORROW_UNKNOWN_ERROR' | RelayErrorCode>,
- *   UseBorrowParams
- * >} A React Query mutation result object containing:
- *   - mutateAsync: (params: UseBorrowParams) => Promise<BorrowResponse>
- *     Triggers the borrow action. Expects an object with valid borrow params and a `SpokeProvider`.
- *   - isPending: `boolean` if a borrow transaction is in progress.
- *   - error: `MoneyMarketError` if the transaction fails, or `null`.
- *
- * @example
- * ```typescript
- * const { mutateAsync: borrow, isPending, error } = useBorrow();
- * await borrow({ params: borrowParams, spokeProvider });
- * ```
- *
- * @throws {Error} When:
- *   - `spokeProvider` is missing or invalid.
- *   - The underlying borrow transaction fails.
+ * Mutation variables for {@link useBorrow}. Generic over `K extends SpokeChainKey` (defaults to
+ * the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useBorrow(): UseMutationResult<
-  BorrowResponse,
-  MoneyMarketError<'CREATE_BORROW_INTENT_FAILED' | 'BORROW_UNKNOWN_ERROR' | RelayErrorCode>,
-  UseBorrowParams
-> {
+export type UseBorrowVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  MoneyMarketBorrowActionParams<K, false>,
+  'raw'
+>;
+
+/**
+ * React hook for borrowing tokens from the Sodax money market protocol.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useBorrow<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseBorrowVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseBorrowVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<
-    BorrowResponse,
-    MoneyMarketError<'CREATE_BORROW_INTENT_FAILED' | 'BORROW_UNKNOWN_ERROR' | RelayErrorCode>,
-    UseBorrowParams
-  >({
-    mutationFn: async ({ params, spokeProvider }: UseBorrowParams) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
+  return useSafeMutation<TxHashPair, Error, UseBorrowVars<K>>({
+    mutationKey: ['mm', 'borrow'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.moneyMarket.borrow({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['mm', 'userReservesData', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['mm', 'userFormattedSummary', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['mm', 'aTokensBalances'] });
+      const balanceChains = new Set([params.srcChainKey, params.dstChainKey ?? params.srcChainKey]);
+      for (const chainKey of balanceChains) {
+        queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', chainKey] });
       }
-
-      const response = await sodax.moneyMarket.borrow(params, spokeProvider);
-
-      if (!response.ok) {
-        throw response.error;
-      }
-
-      return response;
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

@@ -2,10 +2,15 @@ import React from 'react';
 import { useStakingInfo } from '@sodax/dapp-kit';
 import { Skeleton } from '../ui/skeleton';
 import { formatTokenAmount } from '@/lib/utils';
-import type { SpokeProvider } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
 
-export function StakingInfo({ spokeProvider }: Readonly<{ spokeProvider: SpokeProvider }>) {
-  const { data: stakingInfo, isLoading: isLoadingStakingInfo } = useStakingInfo(spokeProvider);
+export function StakingInfo({
+  srcAddress,
+  srcChainKey,
+}: Readonly<{ srcAddress: `0x${string}` | undefined; srcChainKey: SpokeChainKey }>) {
+  const { data: stakingInfo, isLoading: isLoadingStakingInfo } = useStakingInfo({
+    params: { srcAddress, srcChainKey },
+  });
 
   return (
     <div className="space-y-4">

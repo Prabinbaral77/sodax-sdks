@@ -1,97 +1,148 @@
 import { type Address, type Hex, encodeFunctionData } from 'viem';
 import { erc20Abi } from '../shared/abis/index.js';
-import type { EvmContractCall, IcxTokenType } from '../shared/types.js';
-import { encodeContractCalls, Erc20Service, EvmAssetManagerService, type EvmHubProvider } from '../index.js';
+import { encodeContractCalls, Erc20Service, EvmAssetManagerService, type HubProvider } from '../shared/index.js';
 import { icxSwapAbi } from '../shared/abis/icxSwap.abi.js';
 import invariant from 'tiny-invariant';
-import { ICON_MAINNET_CHAIN_ID, type IconEoaAddress, type IconAddress } from '@sodax/types';
+import {
+  ChainKeys,
+  type IconEoaAddress,
+  type IconAddress,
+  type EvmContractCall,
+  type IcxTokenType,
+  type IconChainKey,
+  type Result,
+  type SonicChainKey,
+  type SpokeExecActionParams,
+} from '@sodax/types';
 import type { ConfigService } from '../shared/config/ConfigService.js';
 
+export type IcxMigrateAction<Raw extends boolean> = SpokeExecActionParams<IconChainKey, Raw, IcxMigrateParams>;
+
 export type IcxMigrateParams = {
+  srcAddress: IconAddress;
+  srcChainKey: IconChainKey; // should be ChainKeys.ICON_MAINNET
   address: IcxTokenType; // The ICON address of the ICX or wICX token to migrate
   amount: bigint; // The amount of ICX or wICX to migrate
-  to: Address; // The address that will receive the migrated assets
+  dstAddress: Address; // The address that will receive the migrated assets
 };
 
+export type IcxRevertMigrationAction<Raw extends boolean> = SpokeExecActionParams<
+  SonicChainKey,
+  Raw,
+  IcxCreateRevertMigrationParams
+>;
+
 export type IcxCreateRevertMigrationParams = {
+  srcAddress: Address; // should be Sonic original address
+  srcChainKey: SonicChainKey; // should be ChainKeys.SONIC_MAINNET
   amount: bigint; // The amount of wICX to migrate
-  to: IconEoaAddress; // The address that will receive the migrated SODA tokens as ICX
+  dstAddress: IconEoaAddress; // The address that will receive the migrated SODA tokens as ICX
 };
 
 export type IcxRevertMigrationParams = {
   wICX: IconAddress; // The ICON address of the wICX token
   amount: bigint; // The amount of SODA tokens to migrate to ICX
   userWallet: Address; // The hub wallet address that will migrate assets
-  to: Hex; // The Icon address that will receive the migrated SODA tokens as ICX
+  dstAddress: Hex; // The Icon address that will receive the migrated SODA tokens as ICX
 };
 
 export type IcxMigrationServiceConstructorParams = {
-  hubProvider: EvmHubProvider;
-  configService: ConfigService;
+  hubProvider: HubProvider;
+  config: ConfigService;
 };
 
 /**
- * Service for handling ICX migration operations on the hub chain.
- * Provides functionality to migrate wICX tokens from ICON to the hub chain.
+ * Low-level service for encoding ICX/wICX ↔ SODA migration calldata executed on the hub chain (Sonic).
+ *
+ * This service is used internally by `MigrationService` and should not be called directly.
+ * It encodes the hub-side contract call sequences required to:
+ * - Swap wICX → SODA via the ICX migration contract (`migrateData`)
+ * - Swap SODA → wICX and bridge back to ICON (`revertMigration`)
+ *
+ * It also exposes `getAvailableAmount` to check SODA liquidity in the migration contract
+ * before initiating a forward migration.
  */
 export class IcxMigrationService {
-  private readonly hubProvider: EvmHubProvider;
-  private readonly configService: ConfigService;
+  private readonly hubProvider: HubProvider;
+  private readonly config: ConfigService;
 
-  constructor({ hubProvider, configService }: IcxMigrationServiceConstructorParams) {
+  constructor({ hubProvider, config }: IcxMigrationServiceConstructorParams) {
     this.hubProvider = hubProvider;
-    this.configService = configService;
+    this.config = config;
   }
 
   /**
-   * Retrieves the available amount of SODA tokens in the ICX migration contract.
-   * This represents the amount of tokens available for migration.
+   * Reads the SODA token balance held by the ICX migration contract on the hub chain.
    *
-   * @returns The available balance of SODA tokens in the migration contract
+   * This balance represents the maximum amount of ICX/wICX that can currently be migrated.
+   * `MigrationService.createMigrateIcxToSodaIntent` calls this method to gate migrations
+   * when available liquidity is insufficient.
+   *
+   * @returns The SODA balance (in wei) of the ICX migration contract, or an error result if
+   *   the on-chain read fails.
    */
-  public async getAvailableAmount(): Promise<bigint> {
-    const balance = await this.hubProvider.publicClient.readContract({
-      address: this.hubProvider.chainConfig.addresses.sodaToken,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [this.hubProvider.chainConfig.addresses.icxMigration],
-    });
-
-    return balance;
+  public async getAvailableAmount(): Promise<Result<bigint>> {
+    try {
+      const value = await this.hubProvider.publicClient.readContract({
+        address: this.hubProvider.chainConfig.addresses.sodaToken,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [this.hubProvider.chainConfig.addresses.icxMigration],
+      });
+      return { ok: true, value };
+    } catch (error) {
+      return { ok: false, error };
+    }
   }
 
   /**
-   * Generates transaction data for migrating wICX tokens from ICON to the hub chain.
-   * This method creates the necessary contract calls to:
-   * 1. Approve the migration contract to spend the wICX tokens
-   * 2. Execute the migration swap
+   * Encodes the hub execution calldata for an ICX/wICX → SODA migration.
    *
-   * @param params - The migration parameters including token address, amount, and recipient
-   * @returns Encoded transaction data for the migration operation
-   * @throws Will throw an error if the hub asset configuration is not found
+   * Produces a batched contract call sequence:
+   * 1. Approve the hub asset token to the ICX migration contract.
+   * 2. Call `swap(amount, dstAddress)` on the ICX migration contract to receive SODA.
+   *
+   * The returned hex is intended to be passed as `data` in a spoke `deposit` call so
+   * the hub wallet executes it atomically on arrival.
+   *
+   * @param params - Migration parameters: ICON source address, ICX/wICX token address (`address`),
+   *   `amount`, and EVM destination address (`dstAddress`).
+   * @returns ABI-encoded batch of contract calls ready for hub execution.
+   * @throws If the hub asset configuration for the given token address is not found in `ConfigService`.
    */
   public migrateData(params: IcxMigrateParams): Hex {
     const calls: EvmContractCall[] = [];
-    const assetConfig = this.configService.getHubAssetInfo(ICON_MAINNET_CHAIN_ID, params.address);
-    invariant(assetConfig, `hub asset not found for spoke chain token (token): ${params.address}`);
+    const token = this.config.getSpokeTokenFromOriginalAssetAddress(ChainKeys.ICON_MAINNET, params.address);
+    invariant(token, `token not found for spoke chain token (token): ${params.address}`);
 
     calls.push(
-      Erc20Service.encodeApprove(assetConfig.asset, this.hubProvider.chainConfig.addresses.icxMigration, params.amount),
+      Erc20Service.encodeApprove(token.hubAsset, this.hubProvider.chainConfig.addresses.icxMigration, params.amount),
     );
-    calls.push(this.encodeMigrate(params.amount, params.to));
+    calls.push(this.encodeMigrate(params.amount, params.dstAddress));
     return encodeContractCalls(calls);
   }
 
   /**
-   * Generates transaction data for migrating back tokens to the ICON  chain.
-   * @param params - The migration parameters including token address, amount, and recipient
-   * @returns Encoded transaction data for the migration operation
-   * @throws Will throw an error if the hub asset configuration is not found
+   * Encodes the hub execution calldata for a SODA → wICX reverse migration.
+   *
+   * Produces a batched contract call sequence:
+   * 1. Approve SODA to the ICX migration contract.
+   * 2. Call `reverseSwap(amount, userWallet)` on the ICX migration contract to receive wICX.
+   * 3. Transfer the resulting wICX hub-asset back to the ICON destination address via the
+   *    asset manager.
+   *
+   * The returned hex is intended to be passed as `data` in a spoke `deposit` call so the
+   * user's hub wallet executes it atomically on arrival.
+   *
+   * @param params - Revert parameters: wICX ICON token address, SODA amount, hub wallet address
+   *   (`userWallet`), and ABI-encoded ICON destination address (`dstAddress`).
+   * @returns ABI-encoded batch of contract calls ready for hub execution.
+   * @throws If the hub asset configuration for the given wICX address is not found in `ConfigService`.
    */
   public revertMigration(params: IcxRevertMigrationParams): Hex {
     const calls: EvmContractCall[] = [];
-    const assetConfig = this.configService.getHubAssetInfo(ICON_MAINNET_CHAIN_ID, params.wICX);
-    invariant(assetConfig, `hub asset not found for spoke chain token (token): ${params.wICX}`);
+    const token = this.config.getSpokeTokenFromOriginalAssetAddress(ChainKeys.ICON_MAINNET, params.wICX);
+    invariant(token, `token not found for spoke chain token (token): ${params.wICX}`);
 
     calls.push(
       Erc20Service.encodeApprove(
@@ -103,8 +154,8 @@ export class IcxMigrationService {
     calls.push(this.encodeRevertMigration(params.amount, params.userWallet));
     calls.push(
       EvmAssetManagerService.encodeTransfer(
-        assetConfig.asset,
-        params.to,
+        token.hubAsset,
+        params.dstAddress,
         params.amount,
         this.hubProvider.chainConfig.addresses.assetManager,
       ),
@@ -113,12 +164,11 @@ export class IcxMigrationService {
   }
 
   /**
-   * Encodes a migration transaction for the ICX swap contract.
-   * This creates the contract call data for swapping wICX tokens to SODA tokens.
+   * Encodes a single `swap` call on the ICX migration contract (wICX → SODA).
    *
-   * @param amount - The amount of wICX tokens to migrate
-   * @param to - The address that will receive the migrated SODA tokens
-   * @returns The encoded contract call for the migration operation
+   * @param amount - The amount of wICX hub-asset tokens to swap.
+   * @param to - The EVM address that will receive the resulting SODA tokens.
+   * @returns A single `EvmContractCall` targeting the ICX migration contract.
    */
   public encodeMigrate(amount: bigint, to: Address): EvmContractCall {
     return {
@@ -133,12 +183,11 @@ export class IcxMigrationService {
   }
 
   /**
-   * Encodes a revert migration transaction for the ICX swap contract.
-   * This creates the contract call data for swapping SODA tokens to wICX tokens.
+   * Encodes a single `reverseSwap` call on the ICX migration contract (SODA → wICX).
    *
-   * @param amount - The amount of wICX tokens to migrate
-   * @param to - The address that will receive the migrated SODA tokens
-   * @returns The encoded contract call for the migration operation
+   * @param amount - The amount of SODA tokens to swap back to wICX.
+   * @param to - The EVM address (typically the user's hub wallet) that will receive the wICX tokens.
+   * @returns A single `EvmContractCall` targeting the ICX migration contract.
    */
   public encodeRevertMigration(amount: bigint, to: Address): EvmContractCall {
     return {

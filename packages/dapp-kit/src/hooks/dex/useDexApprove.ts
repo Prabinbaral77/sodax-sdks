@@ -1,55 +1,44 @@
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import type { SpokeProvider, CreateAssetDepositParams, SpokeTxHash } from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
-
-export type UseDexApproveParams = {
-  params: CreateAssetDepositParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/dex/useDexApprove.ts
+import type { AssetDepositAction, SpokeChainKey, TxReturnType } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * React hook for performing a DEX token allowance approval transaction.
- *
- * Returns a mutation object that allows explicitly triggering a token approval
- * for a DEX deposit, using the specified approval parameters and spoke provider.
- * On successful approval, the related allowance query is invalidated and refetched
- * for consistent UI state.
- *
- * @returns {UseMutationResult<SpokeTxHash, Error, UseDexApproveParams>}
- *   React Query mutation result for the approval operation. Use `mutateAsync` with
- *   an object of shape `{ params, spokeProvider }` to initiate approval.
- *
- * @example
- * ```typescript
- * const { mutateAsync: approve, isPending, error } = useDexApprove();
- * await approve({ params: { asset, amount, poolToken }, spokeProvider });
- * ```
- *
- * @remarks
- * - Throws if called without both a valid `params` and `spokeProvider`.
- * - On approval success, the query for ['dex', 'allowance'] is invalidated/refetched.
+ * Mutation variables for {@link useDexApprove}. Generic over `K extends SpokeChainKey` (defaults
+ * to the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useDexApprove(): UseMutationResult<SpokeTxHash, Error, UseDexApproveParams> {
+export type UseDexApproveVars<K extends SpokeChainKey = SpokeChainKey> = Omit<AssetDepositAction<K, false>, 'raw'>;
+
+/**
+ * React hook for approving ERC-20 token spending (or trustline establishment) for a DEX deposit.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped tx return value on success.
+ */
+export function useDexApprove<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxReturnType<K, false>, UseDexApproveVars<K>> = {}): SafeUseMutationResult<
+  TxReturnType<K, false>,
+  Error,
+  UseDexApproveVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ params, spokeProvider }: UseDexApproveParams) => {
-      const approveResult = await sodax.dex.assetService.approve({
-        params,
-        spokeProvider,
-        raw: false,
+  return useSafeMutation<TxReturnType<K, false>, Error, UseDexApproveVars<K>>({
+    mutationKey: ['dex', 'approve'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.dex.assetService.approve({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({
+        queryKey: ['dex', 'allowance', params.srcChainKey, params.asset, params.amount.toString()],
       });
-
-      if (!approveResult.ok) {
-        throw new Error('Approval failed');
-      }
-
-      return approveResult.value;
-    },
-    onSuccess: () => {
-      // Invalidate allowance query to refetch the new allowance
-      queryClient.invalidateQueries({ queryKey: ['dex', 'allowance'] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

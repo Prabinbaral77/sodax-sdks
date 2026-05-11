@@ -1,5 +1,5 @@
-import type { XAccount } from '@/types';
-import { XConnector } from '@/core';
+import type { XAccount } from '../../types/index.js';
+import { XConnector } from '../../core/index.js';
 import type { Wallet } from '@provablehq/aleo-wallet-adaptor-react';
 import { DecryptPermission } from '@provablehq/aleo-wallet-adaptor-core';
 import { AleoXService } from './AleoXService.js';
@@ -33,7 +33,7 @@ export class AleoXConnector extends XConnector {
     await this.wallet.adapter.disconnect();
   }
 
-  public get icon() {
+  public override get icon() {
     return this.wallet.adapter.icon;
   }
 

@@ -1,87 +1,41 @@
-import { type QueryObserverOptions, useQuery, type UseQueryResult } from '@tanstack/react-query';
-import type { SpokeProvider, CreateAssetDepositParams } from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
+import type { CreateAssetDepositParams } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { ReadHookParams } from '../shared/types.js';
 
-export type UseDexAllowanceProps = {
-  params: CreateAssetDepositParams | undefined;
-  spokeProvider: SpokeProvider | null;
-  enabled?: boolean;
-  queryOptions?: QueryObserverOptions<boolean, Error>;
-};
+export type UseDexAllowanceParams<K extends SpokeChainKey = SpokeChainKey> = ReadHookParams<
+  boolean,
+  {
+    payload: CreateAssetDepositParams<K> | undefined;
+  }
+>;
 
 /**
- * Hook to check if the user has approved sufficient token allowance for DEX deposits.
- *
- * This hook automatically queries and tracks the allowance status, indicating whether
- * the user has granted enough allowance to allow a specific deposit to the DEX. It leverages
- * React Query for status, caching, and background refetching.
- *
- * @param {CreateAssetDepositParams | undefined} params
- *   The deposit parameters: asset address, poolToken, and raw amount (BigInt), or undefined to disable.
- * @param {SpokeProvider | undefined} spokeProvider
- *   The provider interface for the selected chain. When undefined, the query is disabled.
- * @param {boolean} [enabled]
- *   Whether the allowance status check is enabled. Defaults to true if both params and spokeProvider are truthy.
- * @param {QueryObserverOptions<boolean, Error>} [queryOptions]
- *   Optional react-query options. Any override here (e.g. staleTime, refetchInterval) will merge with defaults.
- *
- * @returns {UseQueryResult<boolean, Error>}
- *   React Query result object: `data` is boolean (true if allowance is sufficient), plus `isLoading`, `error`, etc.
- *
- * @example
- * ```typescript
- * const { data: isAllowed, isLoading, error } = useDexAllowance({
- *   params: { asset, amount: parseUnits('100', 18), poolToken },
- *   spokeProvider,
- * });
- * if (isLoading) return <Spinner />;
- * if (error) return <div>Error: {error.message}</div>;
- * if (isAllowed) { ... }
- * ```
- *
- * @remarks
- * - The allowance is checked every 5 seconds as long as enabled, params, and spokeProvider are all defined.
- * - Returns `false` if allowance cannot be determined or any error occurs in isAllowanceValid.
- * - Suitable for gating UI actions that require token approval before depositing in the DEX.
+ * React hook to check whether the user has approved sufficient token allowance (or established a
+ * trustline, on Stellar) for a DEX deposit. Read-only — calls `assetService.isAllowanceValid`
+ * with `raw: true` so no `walletProvider` is required.
  */
-export function useDexAllowance({
+export function useDexAllowance<K extends SpokeChainKey = SpokeChainKey>({
   params,
-  spokeProvider,
-  queryOptions = {
-    queryKey: [
-      'dex',
-      'allowance',
-      params?.asset,
-      params?.poolToken,
-      params?.amount.toString(),
-      spokeProvider?.chainConfig.chain.id,
-    ],
-    enabled: !!params && !!spokeProvider,
-  },
-}: UseDexAllowanceProps): UseQueryResult<boolean, Error> {
+  queryOptions,
+}: UseDexAllowanceParams<K> = {}): UseQueryResult<boolean, Error> {
   const { sodax } = useSodaxContext();
+  const payload = params?.payload;
 
-  return useQuery({
-    ...queryOptions,
+  return useQuery<boolean, Error>({
+    queryKey: ['dex', 'allowance', payload?.srcChainKey, payload?.asset, payload?.amount?.toString()],
     queryFn: async () => {
-      if (!params || !spokeProvider) {
-        throw new Error('Params and spoke provider are required');
+      if (!payload) {
+        throw new Error('Params are required');
       }
-
-      const allowanceResult = await sodax.dex.assetService.isAllowanceValid({
-        params: {
-          asset: params.asset,
-          amount: params.amount,
-          poolToken: params.poolToken,
-        },
-        spokeProvider,
-      });
-
-      if (!allowanceResult.ok) {
-        return false;
-      }
-
-      return allowanceResult.value;
+      const result = await sodax.dex.assetService.isAllowanceValid({ params: payload, raw: true });
+      if (!result.ok) throw result.error;
+      return result.value;
     },
+    enabled: !!payload,
+    refetchInterval: 5_000,
+    gcTime: 0,
+    ...queryOptions,
   });
 }

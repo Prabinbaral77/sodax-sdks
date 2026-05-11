@@ -4,19 +4,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Wallet } from 'lucide-react';
-import type { ChainType } from '@sodax/sdk';
-import type { ChainId } from '@sodax/types';
+import type { ChainType, SpokeChainKey } from '@sodax/sdk';
 import { getXChainType, type XAccount } from '@sodax/wallet-sdk-react';
 import { ChainSelector } from '@/components/shared/ChainSelector';
 
 interface SetupProps {
-  selectedChainId: ChainId;
-  selectChainId: (chainId: ChainId) => void;
+  selectedChainId: SpokeChainKey;
+  selectChainId: (chainId: SpokeChainKey) => void;
   isWrongChain: boolean;
   handleSwitchChain: () => void;
   xAccount: XAccount | null;
   openWalletModal: () => void;
-  disconnect: (chainType: ChainType) => void;
+  disconnect: (options: { xChainType: ChainType }) => void;
 }
 
 export function Setup({
@@ -71,9 +70,8 @@ export function Setup({
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    if (selectedChainId) {
-                      disconnect(getXChainType(selectedChainId) as ChainType);
-                    }
+                    const xChainType = selectedChainId ? getXChainType(selectedChainId) : undefined;
+                    if (xChainType) disconnect({ xChainType });
                   }}
                 >
                   Disconnect

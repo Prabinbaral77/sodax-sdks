@@ -1,15 +1,15 @@
 import { XIcon, Loader2 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { ChainType } from '@sodax/types';
+import type { ChainType } from '@sodax/sdk';
 import {
   useXAccount,
   useXConnect,
   useXConnection,
   useXConnectors,
   useXDisconnect,
-  type XConnector,
 } from '@sodax/wallet-sdk-react';
+import type { IXConnector } from '@sodax/wallet-sdk-react';
 import { Button } from '@/components/ui/button';
 
 export type WalletItemProps = {
@@ -27,18 +27,18 @@ export function shortenAddress(address: string, chars = 7): string {
 }
 
 const WalletItem = ({ name, xChainType, onConnectionSuccess }: WalletItemProps) => {
-  const xConnection = useXConnection(xChainType);
-  const { address } = useXAccount(xChainType);
+  const xConnection = useXConnection({ xChainType });
+  const { address } = useXAccount({ xChainType });
 
-  const [connectingXConnector, setConnectingXConnector] = useState<XConnector | null>(null);
+  const [connectingXConnector, setConnectingXConnector] = useState<IXConnector | null>(null);
   const [wasConnecting, setWasConnecting] = useState(false);
 
-  const xConnectors = useXConnectors(xChainType);
+  const xConnectors = useXConnectors({ xChainType });
   const { mutateAsync: xConnect, isPending } = useXConnect();
   const xDisconnect = useXDisconnect();
 
   const handleConnect = useCallback(
-    async (xConnector: XConnector) => {
+    async (xConnector: IXConnector) => {
       setConnectingXConnector(xConnector);
       setWasConnecting(true);
       try {
@@ -69,7 +69,7 @@ const WalletItem = ({ name, xChainType, onConnectionSuccess }: WalletItemProps) 
 
   const handleDisconnect = useCallback(() => {
     setConnectingXConnector(null);
-    xDisconnect(xChainType);
+    xDisconnect({ xChainType });
   }, [xDisconnect, xChainType]);
 
   ///////////////////////////////////////////////////////////////////////////////////////////

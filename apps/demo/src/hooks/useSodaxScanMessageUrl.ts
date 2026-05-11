@@ -23,34 +23,29 @@ export function useSodaxScanMessageUrl(txHash: string | undefined): UseSodaxScan
       return;
     }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let retryCount = 0;
     const maxRetries = 3;
-    const retryDelay = 2000; // 2 seconds between retries
+    const retryDelay = 2000;
 
     const fetchUrl = async (): Promise<void> => {
       try {
         const resolved = await getSodaxScanMessageUrl(txHash);
-        if (!cancelled) {
-          if (resolved) {
-            setUrl(resolved);
-            setIsLoading(false);
-          } else if (retryCount < maxRetries) {
-            // Retry if message not found (might not be indexed yet)
-            retryCount++;
-            setTimeout(() => {
-              if (!cancelled) fetchUrl();
-            }, retryDelay);
-          } else {
-            // Give up after max retries
-            setUrl(null);
-            setIsLoading(false);
-          }
-        }
-      } catch {
-        if (!cancelled) {
+        if (cancelled) return;
+        if (resolved) {
+          setUrl(resolved);
+          setIsLoading(false);
+        } else if (retryCount < maxRetries) {
+          retryCount++;
+          retryTimer = setTimeout(fetchUrl, retryDelay);
+        } else {
           setUrl(null);
           setIsLoading(false);
         }
+      } catch {
+        if (cancelled) return;
+        setUrl(null);
+        setIsLoading(false);
       }
     };
 
@@ -60,6 +55,7 @@ export function useSodaxScanMessageUrl(txHash: string | undefined): UseSodaxScan
 
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
   }, [txHash]);
 

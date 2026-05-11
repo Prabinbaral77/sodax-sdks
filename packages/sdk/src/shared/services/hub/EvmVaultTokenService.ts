@@ -1,7 +1,6 @@
 import { type Address, type Hash, type HttpTransport, type PublicClient, encodeFunctionData } from 'viem';
 import { vaultTokenAbi } from '../../abis/index.js';
-import type { EvmContractCall, VaultReserves } from '../../types.js';
-import type { IEvmWalletProvider, TokenInfo } from '@sodax/types';
+import type { IEvmWalletProvider, TokenInfo, EvmContractCall, VaultReserves } from '@sodax/types';
 
 export class EvmVaultTokenService {
   private constructor() {}
@@ -28,33 +27,36 @@ export class EvmVaultTokenService {
     return { decimals, depositFee, withdrawalFee, maxDeposit, isSupported };
   }
 
-    /**
-     * Fetches token information for a list of tokens in a vault using a multicall.
-     * @param vault - The address of the vault contract.
-     * @param tokens - An array of token addresses to fetch info for.
-     * @param publicClient - The Viem PublicClient instance used to interact with the blockchain.
-     * @returns A promise that resolves to an array of TokenInfo objects, one for each provided token.
-     */
-    public static async getTokenInfos(
-      vault: Address,
-      tokens: Address[],
-      publicClient: PublicClient<HttpTransport>,
-    ): Promise<TokenInfo[]> {
-      const infos = await publicClient.multicall({
-        contracts: tokens.map(token => ({
-          address: vault,
-          abi: vaultTokenAbi,
-          functionName: 'tokenInfo',
-          args: [token],
-        } as const)),
-        allowFailure: false,
-      });
+  /**
+   * Fetches token information for a list of tokens in a vault using a multicall.
+   * @param vault - The address of the vault contract.
+   * @param tokens - An array of token addresses to fetch info for.
+   * @param publicClient - The Viem PublicClient instance used to interact with the blockchain.
+   * @returns A promise that resolves to an array of TokenInfo objects, one for each provided token.
+   */
+  public static async getTokenInfos(
+    vault: Address,
+    tokens: Address[],
+    publicClient: PublicClient<HttpTransport>,
+  ): Promise<TokenInfo[]> {
+    const infos = await publicClient.multicall({
+      contracts: tokens.map(
+        token =>
+          ({
+            address: vault,
+            abi: vaultTokenAbi,
+            functionName: 'tokenInfo',
+            args: [token],
+          }) as const,
+      ),
+      allowFailure: false,
+    });
 
-      return infos.map(info => {
-        const [decimals, depositFee, withdrawalFee, maxDeposit, isSupported] = info;
-        return { decimals, depositFee, withdrawalFee, maxDeposit, isSupported };
-      });
-    }
+    return infos.map(info => {
+      const [decimals, depositFee, withdrawalFee, maxDeposit, isSupported] = info;
+      return { decimals, depositFee, withdrawalFee, maxDeposit, isSupported };
+    });
+  }
 
   /**
    * Retrieves the reserves of the vault.
@@ -79,33 +81,33 @@ export class EvmVaultTokenService {
     };
   }
 
-  /**
+    /**
    * Retrieves all token information for the vault.
    * @param vault - The address of the vault.
    * @param publicClient - PublicClient<HttpTransport>
    * @returns A promise that resolves to an object containing tokens, their infos, and reserves.
    */
-  async getAllTokenInfo(
-    vault: Address,
-    publicClient: PublicClient<HttpTransport>,
-  ): Promise<{
-    tokens: readonly Address[];
-    infos: readonly TokenInfo[];
-    reserves: readonly bigint[];
-  }> {
-    const [tokens, infos, reserves] = await publicClient.readContract({
-      address: vault,
-      abi: vaultTokenAbi,
-      functionName: 'getAllTokenInfo',
-      args: [],
-    });
+    public static async getAllTokenInfo(
+      vault: Address,
+      publicClient: PublicClient<HttpTransport>,
+    ): Promise<{
+      tokens: readonly Address[];
+      infos: readonly TokenInfo[];
+      reserves: readonly bigint[];
+    }> {
+      const [tokens, infos, reserves] = await publicClient.readContract({
+        address: vault,
+        abi: vaultTokenAbi,
+        functionName: 'getAllTokenInfo',
+        args: [],
+      });
 
-    return {
-      tokens,
-      infos,
-      reserves,
-    };
-  }
+      return {
+        tokens,
+        infos,
+        reserves,
+      };
+    }
 
   /**
    * Deposits a specified amount of a token into the vault.

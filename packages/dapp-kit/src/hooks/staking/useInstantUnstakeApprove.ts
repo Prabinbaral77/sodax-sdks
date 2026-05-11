@@ -1,52 +1,52 @@
-// packages/dapp-kit/src/hooks/staking/useStakeApprove.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { InstantUnstakeParams, TxReturnType, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+// packages/dapp-kit/src/hooks/staking/useInstantUnstakeApprove.ts
+import type { GetWalletProviderType, InstantUnstakeParams, SpokeChainKey, TxReturnType } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * Hook for approving xSODA token spending for instant unstaking operations.
- * Uses React Query's useMutation for better state management and caching.
- *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the approval
- * @returns {UseMutationResult<TxReturnType<SpokeProvider, false>, Error, Omit<InstantUnstakeParams, 'action'>>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: approve, isPending } = useInstantUnstakeApprove(spokeProvider);
- *
- * const handleApprove = async () => {
- *   const result = await approve({
- *     amount: 1000000000000000000n, // 1 xSODA
- *     minAmount: 950000000000000000n, // 0.95 SODA
- *     account: '0x...'
- *   });
- *
- *   console.log('Approval successful:', result);
- * };
- * ```
+ * Mutation variables for {@link useInstantUnstakeApprove}. The `action` literal is injected by
+ * the hook.
  */
-export function useInstantUnstakeApprove(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<TxReturnType<SpokeProvider, false>, Error, Omit<InstantUnstakeParams, 'action'>> {
+export type UseInstantUnstakeApproveVars<K extends SpokeChainKey = SpokeChainKey> = {
+  params: Omit<InstantUnstakeParams<K>, 'action'>;
+  walletProvider: GetWalletProviderType<K>;
+};
+
+/**
+ * React hook for approving xSODA spending on the instant-unstake action.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped tx return value on success.
+ */
+export function useInstantUnstakeApprove<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxReturnType<K, false>, UseInstantUnstakeApproveVars<K>> = {}): SafeUseMutationResult<
+  TxReturnType<K, false>,
+  Error,
+  UseInstantUnstakeApproveVars<K>
+> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<TxReturnType<SpokeProvider, false>, Error, Omit<InstantUnstakeParams, 'action'>>({
-    mutationFn: async (params: Omit<InstantUnstakeParams, 'action'>) => {
-      console.log('useInstantUnstakeApprove called with params:', params);
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-
-      const result = await sodax.staking.approve({
-        params: { ...params, action: 'instantUnstake' },
-        spokeProvider,
+  return useSafeMutation<TxReturnType<K, false>, Error, UseInstantUnstakeApproveVars<K>>({
+    mutationKey: ['staking', 'approve', 'instantUnstake'],
+    ...mutationOptions,
+    mutationFn: async ({ params, walletProvider }) =>
+      unwrapResult(
+        await sodax.staking.approve({
+          params: { ...params, action: 'instantUnstake' },
+          raw: false,
+          walletProvider,
+        }),
+      ),
+    onSuccess: async (data, vars, ctx) => {
+      queryClient.invalidateQueries({
+        queryKey: ['staking', 'allowance', vars.params.srcChainKey, 'instantUnstake'],
       });
-
-      if (!result.ok) {
-        throw new Error(`Instant unstake approval failed: ${result.error.code}`);
-      }
-
-      return result.value;
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

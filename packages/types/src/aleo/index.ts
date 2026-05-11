@@ -1,4 +1,4 @@
-import type { WalletAddressProvider } from "../common/index.js";
+import type { ICoreWallet } from "../wallet/wallet.js";
 
 export type AleoEoaAddress = `aleo1${string}`;
 export type AleoTransactionId = `at1${string}`;
@@ -62,7 +62,8 @@ export type AleoRawTransaction = {
   value: bigint;
   data: AleoExecuteOptions;
 };
-export interface IAleoWalletProvider extends WalletAddressProvider {
+export interface IAleoWalletProvider extends ICoreWallet {
+  readonly chainType: 'ALEO';
   getWalletAddress: () => Promise<string>;
   execute: (options: AleoExecuteOptions) => Promise<AleoExecutionResult>;
   waitForTransactionReceipt: (
@@ -77,3 +78,11 @@ export interface IAleoWalletProvider extends WalletAddressProvider {
     receipt: AleoTransactionReceipt;
   }>;
 }
+
+export type AleoReturnType<Raw extends boolean> = Raw extends true
+  ? AleoRawTransaction
+  : Raw extends false
+    ? string
+    : AleoRawTransaction | string;
+
+export type AleoRawTransactionReceipt = AleoTransactionReceipt;

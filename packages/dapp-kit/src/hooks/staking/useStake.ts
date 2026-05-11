@@ -1,47 +1,42 @@
 // packages/dapp-kit/src/hooks/staking/useStake.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { StakeParams, SpokeTxHash, HubTxHash, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+import type { SpokeChainKey, StakeAction, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * Hook for executing stake transactions to stake SODA tokens and receive xSODA shares.
- * Uses React Query's useMutation for better state management and caching.
- *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the stake
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, StakeParams>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: stake, isPending } = useStake(spokeProvider);
- *
- * const handleStake = async () => {
- *   const result = await stake({
- *     amount: 1000000000000000000n, // 1 SODA
- *     account: '0x...'
- *   });
- *
- *   console.log('Stake successful:', result);
- * };
- * ```
+ * Mutation variables for {@link useStake}. Generic over `K extends SpokeChainKey` (defaults to
+ * the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useStake(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<[SpokeTxHash, HubTxHash], Error, StakeParams> {
+export type UseStakeVars<K extends SpokeChainKey = SpokeChainKey> = Omit<StakeAction<K, false>, 'raw'>;
+
+/**
+ * React hook for staking SODA tokens.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useStake<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseStakeVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseStakeVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<[SpokeTxHash, HubTxHash], Error, StakeParams>({
-    mutationFn: async (params: StakeParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-
-      const result = await sodax.staking.stake(params, spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Stake failed: ${result.error.code}`);
-      }
-
-      return result.value;
+  return useSafeMutation<TxHashPair, Error, UseStakeVars<K>>({
+    mutationKey: ['staking', 'stake'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.staking.stake({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['staking', 'info', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'allowance', params.srcChainKey, 'stake'] });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'stakeRatio'] });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'convertedAssets'] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

@@ -1,32 +1,36 @@
-import { useXWagmiStore } from '@/useXWagmiStore';
-import { InjectiveXService } from './InjectiveXService';
-import { isEvmBrowserWallet } from '@injectivelabs/wallet-base';
+import { useXWalletStore } from '@/useXWalletStore.js';
+import { InjectiveXService } from './InjectiveXService.js';
+import { isEvmBrowserWallet, Wallet } from '@injectivelabs/wallet-base';
 import { getInjectiveAddress } from '@injectivelabs/sdk-ts';
-import type { Wallet } from '@injectivelabs/wallet-base';
+
+function isWallet(value: string): value is Wallet {
+  return Object.values(Wallet).some(v => v === value);
+}
 
 export const reconnectInjective = async () => {
-  const injectiveConnection = useXWagmiStore.getState().xConnections.INJECTIVE;
+  const injectiveConnection = useXWalletStore.getState().xConnections.INJECTIVE;
   if (!injectiveConnection) return;
 
   const recentXConnectorId = injectiveConnection.xConnectorId;
+  if (!isWallet(recentXConnectorId)) {
+    console.warn(`[Injective] Stale wallet ID skipped: ${recentXConnectorId}`);
+    return;
+  }
+
   const walletStrategy = InjectiveXService.getInstance().walletStrategy;
-  await walletStrategy.setWallet(recentXConnectorId as Wallet);
+  await walletStrategy.setWallet(recentXConnectorId);
   const addresses = await walletStrategy.getAddresses();
 
-  const address = isEvmBrowserWallet(recentXConnectorId as Wallet)
-    ? getInjectiveAddress(addresses?.[0])
-    : addresses?.[0];
+  const firstAddress = addresses?.[0];
+  if (!firstAddress) return;
 
-  useXWagmiStore.setState({
-    xConnections: {
-      ...useXWagmiStore.getState().xConnections,
-      INJECTIVE: {
-        xAccount: {
-          address,
-          xChainType: 'INJECTIVE',
-        },
-        xConnectorId: recentXConnectorId,
-      },
+  const address = isEvmBrowserWallet(recentXConnectorId) ? getInjectiveAddress(firstAddress) : firstAddress;
+
+  useXWalletStore.getState().setXConnection('INJECTIVE', {
+    xAccount: {
+      address,
+      xChainType: 'INJECTIVE',
     },
+    xConnectorId: recentXConnectorId,
   });
 };

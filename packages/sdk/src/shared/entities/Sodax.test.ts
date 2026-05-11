@@ -1,665 +1,462 @@
-import { WalletAbstractionService } from '../services/hub/index.js';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import {
-  type CreateIntentParams,
-  type EvmHubProviderConfig,
-  type FeeAmount,
-  type Intent,
-  SolverIntentErrorCode,
-  type SolverErrorResponse,
-  type SolverExecutionRequest,
-  type SolverExecutionResponse,
-  type SolverIntentQuoteRequest,
-  type SolverIntentStatusRequest,
-  type PacketData,
-  type PartnerFee,
-  type RelayTxStatus,
-  type Result,
-  EvmSolverService,
-  type SolverConfigParams,
-  encodeAddress,
-  getHubChainConfig,
-} from '../../index.js';
+/**
+ * Tests for the Sodax facade — the main SDK entry point at `src/shared/entities/Sodax.ts`.
+ *
+ * Mirrors the pattern from MoneyMarketService.test.ts (PR #1193) and SwapService.test.ts (PR #1174):
+ *   1. Module-source mocks via `vi.mock` + `vi.hoisted` for every collaborator class so the
+ *      facade can be exercised in isolation. Each fake class records its constructor args into a
+ *      shared sink, lets us assert exact dependency wiring without instantiating real services
+ *      (which would touch RPCs, viem clients, the backend API, etc.).
+ *   2. A fresh `new Sodax()` per test (in `beforeEach`), with the captured-arg sinks reset on
+ *      every iteration so tests don't bleed into each other.
+ *   3. One top-level `describe` per facet (instanceConfig merge, sub-service instantiation,
+ *      dependency wiring, override propagation, `initialize()` delegation, instance isolation).
+ *
+ * The Sodax class itself is a thin facade: a constructor that wires up 12 collaborators with
+ * shared dependencies, plus an `initialize()` method that delegates to `config.initialize()`.
+ * The behavioral surface is therefore the wiring, not business logic — every assertion either
+ * pins a constructor argument or pins the merge/delegation contract.
+ */
+import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { sodaxConfig, type Result, type SodaxConfig } from '@sodax/types';
+
+// --- hoisted shared state -------------------------------------------------
+//
+// `vi.hoisted` lifts this block alongside the `vi.mock` factories so the factories below can
+// close over `helpers.captured` and `helpers.makeFakeService`. Without hoisting, the factories
+// would run before these bindings exist (vi.mock is hoisted to the top of the file by Vitest).
+//
+// Each `captured.<service>` array is the constructor-args sink for the corresponding fake class.
+// `configInitialize` is the stub method that fake ConfigService instances expose, allowing us to
+// drive `Sodax.initialize()` outcomes without a real ConfigService implementation.
+
+const helpers = vi.hoisted(() => {
+  const captured = {
+    backendApi: [] as unknown[],
+    config: [] as unknown[],
+    evmHub: [] as unknown[],
+    spokeService: [] as unknown[],
+    swap: [] as unknown[],
+    moneyMarket: [] as unknown[],
+    dex: [] as unknown[],
+    migration: [] as unknown[],
+    bridge: [] as unknown[],
+    staking: [] as unknown[],
+    partner: [] as unknown[],
+    recovery: [] as unknown[],
+    configInitialize: vi.fn(),
+  };
+
+  // Class factory used by every service mock except ConfigService (which needs an `initialize`
+  // method bound to the shared stub). Each instance carries `__type` (so tests can identify it
+  // without relying on the imported class identity) and `__args` (a snapshot of its constructor
+  // input — useful for per-instance assertions even if multiple instances exist).
+  function makeFakeService(typeName: string, sink: unknown[]) {
+    return class FakeService {
+      public readonly __args: unknown;
+      public readonly __type: string = typeName;
+      constructor(args: unknown) {
+        this.__args = args;
+        sink.push(args);
+      }
+    };
+  }
+
+  return { captured, makeFakeService };
+});
+
+vi.mock('../../backendApi/BackendApiService.js', () => ({
+  BackendApiService: helpers.makeFakeService('BackendApiService', helpers.captured.backendApi),
+}));
+
+vi.mock('../config/index.js', () => ({
+  // ConfigService also exposes an `initialize` instance method that Sodax.initialize() delegates
+  // to — bind it to the hoisted vi.fn so per-test `mockResolvedValueOnce` calls take effect.
+  ConfigService: class FakeConfigService {
+    public readonly __args: unknown;
+    public readonly __type = 'ConfigService';
+    public readonly initialize = helpers.captured.configInitialize;
+    constructor(args: unknown) {
+      this.__args = args;
+      helpers.captured.config.push(args);
+    }
+  },
+}));
+
+vi.mock('./EvmHubProvider.js', () => ({
+  EvmHubProvider: helpers.makeFakeService('EvmHubProvider', helpers.captured.evmHub),
+}));
+
+vi.mock('../services/spoke/SpokeService.js', () => ({
+  SpokeService: helpers.makeFakeService('SpokeService', helpers.captured.spokeService),
+}));
+
+vi.mock('../../swap/SwapService.js', () => ({
+  SwapService: helpers.makeFakeService('SwapService', helpers.captured.swap),
+}));
+
+vi.mock('../../moneyMarket/MoneyMarketService.js', () => ({
+  MoneyMarketService: helpers.makeFakeService('MoneyMarketService', helpers.captured.moneyMarket),
+}));
+
+vi.mock('../../dex/DexService.js', () => ({
+  DexService: helpers.makeFakeService('DexService', helpers.captured.dex),
+}));
+
+vi.mock('../../migration/MigrationService.js', () => ({
+  MigrationService: helpers.makeFakeService('MigrationService', helpers.captured.migration),
+}));
+
+vi.mock('../../bridge/BridgeService.js', () => ({
+  BridgeService: helpers.makeFakeService('BridgeService', helpers.captured.bridge),
+}));
+
+vi.mock('../../staking/StakingService.js', () => ({
+  StakingService: helpers.makeFakeService('StakingService', helpers.captured.staking),
+}));
+
+vi.mock('../../partner/PartnerService.js', () => ({
+  PartnerService: helpers.makeFakeService('PartnerService', helpers.captured.partner),
+}));
+
+vi.mock('../../recovery/RecoveryService.js', () => ({
+  RecoveryService: helpers.makeFakeService('RecoveryService', helpers.captured.recovery),
+}));
+
 import { Sodax } from './Sodax.js';
-import { EvmSpokeProvider } from './Providers.js';
-import * as IntentRelayApiService from '../services/intentRelay/IntentRelayApiService.js';
-import {
-  ARBITRUM_MAINNET_CHAIN_ID,
-  BSC_MAINNET_CHAIN_ID,
-  SONIC_MAINNET_CHAIN_ID,
-  getMoneyMarketConfig,
-  type IEvmWalletProvider,
-  spokeChainConfig,
-  getIntentRelayChainId,
-} from '@sodax/types';
 
-describe('Sodax', () => {
-  const partnerFeePercentage = {
-    address: '0x0000000000000000000000000000000000000000', // NOTE: replace with actual partner address
-    percentage: 100,
-  } satisfies PartnerFee;
+// --- per-test reset -------------------------------------------------------
+//
+// The captured arrays accumulate across `new Sodax()` calls — without a per-test reset, tests
+// that introspect the most-recent constructor call would race with prior tests. Truncate via
+// `length = 0` (preserves the array reference, which the hoisted mock factories already closed
+// over) rather than reassigning.
 
-  const partnerFeeAmount = {
-    address: '0x0000000000000000000000000000000000000000', // NOTE: replace with actual partner address
-    amount: 1000n,
-  } satisfies PartnerFee;
+const SINK_KEYS = [
+  'backendApi',
+  'config',
+  'evmHub',
+  'spokeService',
+  'swap',
+  'moneyMarket',
+  'dex',
+  'migration',
+  'bridge',
+  'staking',
+  'partner',
+  'recovery',
+] as const satisfies readonly (keyof typeof helpers.captured)[];
 
-  const solverConfig = {
-    intentsContract: '0x6382D6ccD780758C5e8A6123c33ee8F4472F96ef',
-    solverApiEndpoint: 'https://sodax-solver-staging.iconblockchain.xyz',
-    partnerFee: partnerFeePercentage,
-  } satisfies SolverConfigParams;
+beforeEach(() => {
+  for (const key of SINK_KEYS) {
+    (helpers.captured[key] as unknown[]).length = 0;
+  }
+  helpers.captured.configInitialize.mockReset();
+});
 
-  const moneyMarketConfig = getMoneyMarketConfig(SONIC_MAINNET_CHAIN_ID);
+// --- typed accessor for `__type` / `__args` (the fake-class markers) ------
 
-  const hubConfig = {
-    hubRpcUrl: 'https://rpc.soniclabs.com',
-    chainConfig: getHubChainConfig(),
-  } satisfies EvmHubProviderConfig;
+type FakeInstance = { readonly __type: string; readonly __args: unknown };
+const asFake = (value: unknown): FakeInstance => value as FakeInstance;
 
-  // main instance to be used for all features
-  const sodax = new Sodax({
-    swaps: solverConfig,
-    moneyMarket: moneyMarketConfig,
-    hubProviderConfig: hubConfig,
+// =========================================================================
+// instanceConfig — the `config ? deepMerge(...) : sodaxConfig` ternary
+// =========================================================================
+
+describe('Sodax constructor — instanceConfig', () => {
+  it('uses the imported sodaxConfig reference as-is when called with no arguments', () => {
+    const sodax = new Sodax();
+    // Referential identity — the falsy branch of the ternary returns the imported default
+    // directly, no clone. Mutation `config ? deepMerge(...) : deepMerge(...)` would break this.
+    expect(sodax.instanceConfig).toBe(sodaxConfig);
   });
 
-  describe('constructor', () => {
-    it('should initialize with both services', () => {
-      expect(sodax.swaps).toBeDefined();
-      expect(sodax.moneyMarket).toBeDefined();
-    });
-
-    it('should initialize with custom hub provider config', () => {
-      const sodax = new Sodax({
-        swaps: solverConfig,
-        hubProviderConfig: hubConfig,
-      });
-      expect(sodax.swaps).toBeDefined();
-    });
+  it('treats explicit undefined the same as no argument (falsy ternary branch)', () => {
+    const sodax = new Sodax(undefined);
+    expect(sodax.instanceConfig).toBe(sodaxConfig);
   });
 
-  describe('SwapService', () => {
-    const bscEthToken = '0x2170Ed0880ac9A755fd29B2688956BD959F933F8';
-    const arbWbtcToken = '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f';
-
-    const mockEvmWalletProvider = {
-      sendTransaction: vi.fn(),
-      getWalletAddress: vi.fn().mockResolvedValue('0x9999999999999999999999999999999999999999'),
-      waitForTransactionReceipt: vi.fn(),
-    } as unknown as IEvmWalletProvider;
-
-    const mockBscSpokeProvider = new EvmSpokeProvider(mockEvmWalletProvider, spokeChainConfig[BSC_MAINNET_CHAIN_ID]);
-
-    describe('getQuote', () => {
-      const quoteRequest = {
-        token_src: bscEthToken,
-        token_dst: arbWbtcToken,
-        token_src_blockchain_id: BSC_MAINNET_CHAIN_ID,
-        token_dst_blockchain_id: ARBITRUM_MAINNET_CHAIN_ID,
-        amount: 1000n,
-        quote_type: 'exact_input',
-      } satisfies SolverIntentQuoteRequest;
-
-      it('should return a successful quote response', async () => {
-        // Mock fetch response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            quoted_amount: '950',
-            uuid: 'a0dd7652-b360-4123-ab2d-78cfbcd20c6b',
-          }),
-        });
-
-        const result = await sodax.swaps.getQuote(quoteRequest);
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBeDefined();
-          expect(result.value.quoted_amount).toBe(950n);
-        }
-        expect(fetch).toHaveBeenCalledWith(
-          `${solverConfig.solverApiEndpoint}/quote`,
-          expect.objectContaining({
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: expect.any(String),
-          }),
-        );
-      });
-
-      it('should handle API error responses', async () => {
-        // Mock fetch error response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: false,
-          json: async () => ({
-            detail: {
-              code: SolverIntentErrorCode.NO_PATH_FOUND,
-              message: 'Invalid request parameters',
-            },
-          }),
-        });
-
-        const result = await sodax.swaps.getQuote(quoteRequest);
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBeDefined();
-        }
-      });
-
-      it('should handle network errors', async () => {
-        // Mock fetch throwing an error
-        global.fetch = vi.fn().mockRejectedValueOnce(new Error('Network error'));
-
-        const result = await sodax.swaps.getQuote(quoteRequest);
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBeDefined();
-          expect(result.error.detail.code).toBe(SolverIntentErrorCode.UNKNOWN);
-        }
-      });
-    });
-
-    describe('getPartnerFee', () => {
-      it('should calculate fee correctly for given input amount', async () => {
-        const inputAmount = 1000n;
-        const expectedFee = 10n; // Assuming 1% fee
-
-        const result = sodax.swaps.getPartnerFee(inputAmount);
-
-        expect(result).toBe(expectedFee);
-      });
-    });
-
-    describe('postExecution', () => {
-      const executionRequest = {
-        intent_tx_hash: '0xba3dce19347264db32ced212ff1a2036f20d9d2c7493d06af15027970be061af',
-      } satisfies SolverExecutionRequest;
-
-      it('should return a successful post execution response', async () => {
-        // Mock fetch response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: true,
-          json: async () =>
-            ({
-              answer: 'OK',
-              intent_hash: '0xba3dce19347264db32ced212ff1a2036f20d9d2c7493d06af15027970be061af',
-            }) satisfies SolverExecutionResponse,
-        });
-
-        const result: Result<SolverExecutionResponse, SolverErrorResponse> =
-          await sodax.swaps.postExecution(executionRequest);
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBeDefined();
-          expect(result.value.intent_hash).toBeDefined();
-          expect(result.value.answer).toBe('OK');
-        }
-        expect(fetch).toHaveBeenCalledWith(
-          `${solverConfig.solverApiEndpoint}/execute`,
-          expect.objectContaining({
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: expect.any(String),
-          }),
-        );
-      });
-
-      it('should handle API error responses', async () => {
-        // Mock fetch error response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: false,
-          json: async () => ({
-            detail: {
-              code: SolverIntentErrorCode.QUOTE_NOT_FOUND,
-              message: 'Execution failed',
-            },
-          }),
-        });
-
-        const result = await sodax.swaps.postExecution(executionRequest);
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBeDefined();
-        }
-      });
-    });
-
-    describe('getStatus', () => {
-      const statusRequest = {
-        intent_tx_hash: '0xba3dce19347264db32ced212ff1a2036f20d9d2c7493d06af15027970be061af',
-      } satisfies SolverIntentStatusRequest;
-
-      it('should return a successful status response', async () => {
-        // Mock fetch response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            status: 3,
-            intent_hash: '0xba3dce19347264db32ced212ff1a2036f20d9d2c7493d06af15027970be061af',
-          }),
-        });
-
-        const result = await sodax.swaps.getStatus(statusRequest);
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBeDefined();
-          expect(result.value.status).toBe(3);
-        }
-        expect(fetch).toHaveBeenCalledWith(
-          `${solverConfig.solverApiEndpoint}/status`,
-          expect.objectContaining({
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: expect.any(String),
-          }),
-        );
-      });
-
-      it('should handle API error responses', async () => {
-        // Mock fetch error response
-        global.fetch = vi.fn().mockResolvedValueOnce({
-          ok: false,
-          json: async () => ({
-            detail: {
-              code: SolverIntentErrorCode.NO_PATH_FOUND,
-              message: 'Intent not found',
-            },
-          }),
-        });
-
-        const result = await sodax.swaps.getStatus(statusRequest);
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBeDefined();
-        }
-      });
-    });
-
-    describe('swap', () => {
-      let mockCreateIntentParams: CreateIntentParams;
-      let mockIntent: Intent & FeeAmount;
-      let mockPacketData: PacketData;
-
-      beforeEach(async () => {
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-        mockCreateIntentParams = {
-          inputToken: bscEthToken,
-          outputToken: arbWbtcToken,
-          inputAmount: BigInt(1000000),
-          minOutputAmount: BigInt(900000),
-          deadline: BigInt(0),
-          allowPartialFill: false,
-          srcChain: BSC_MAINNET_CHAIN_ID,
-          dstChain: ARBITRUM_MAINNET_CHAIN_ID,
-          srcAddress: walletAddress,
-          dstAddress: walletAddress,
-          solver: '0x0000000000000000000000000000000000000000',
-          data: '0x',
-        } satisfies CreateIntentParams;
-
-        const walletAddressBytes = await mockEvmWalletProvider.getWalletAddress();
-        const creatorAddress = await mockBscSpokeProvider.walletProvider.getWalletAddress();
-        mockIntent = {
-          intentId: BigInt(1),
-          creator: creatorAddress,
-          inputToken:
-            sodax.config.getHubAssetInfo(mockCreateIntentParams.srcChain, mockCreateIntentParams.inputToken)?.asset ??
-            '0x',
-          outputToken:
-            sodax.config.getHubAssetInfo(mockCreateIntentParams.dstChain, mockCreateIntentParams.outputToken)?.asset ??
-            '0x',
-          inputAmount: mockCreateIntentParams.inputAmount,
-          minOutputAmount: mockCreateIntentParams.minOutputAmount,
-          deadline: mockCreateIntentParams.deadline,
-          allowPartialFill: mockCreateIntentParams.allowPartialFill,
-          srcChain: getIntentRelayChainId(mockCreateIntentParams.srcChain),
-          dstChain: getIntentRelayChainId(mockCreateIntentParams.dstChain),
-          srcAddress: walletAddressBytes,
-          dstAddress: walletAddressBytes,
-          solver: mockCreateIntentParams.solver,
-          data: mockCreateIntentParams.data,
-          feeAmount: partnerFeeAmount.amount,
-        } satisfies Intent & FeeAmount;
-
-        mockPacketData = {
-          src_chain_id: Number(getIntentRelayChainId(BSC_MAINNET_CHAIN_ID)), // BSC chain ID
-          src_tx_hash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-          src_address: '0x1234567890123456789012345678901234567890',
-          status: 'executed' satisfies RelayTxStatus,
-          dst_chain_id: Number(getIntentRelayChainId(ARBITRUM_MAINNET_CHAIN_ID)), // Arbitrum chain ID
-          conn_sn: 1,
-          dst_address: '0x1234567890123456789012345678901234567890',
-          dst_tx_hash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-          signatures: ['0x1234567890123456789012345678901234567890'],
-          payload: '0x',
-        } satisfies PacketData;
-      });
-
-      it('should successfully create and submit an intent', async () => {
-        const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-
-        vi.spyOn(sodax.swaps, 'createIntent').mockResolvedValueOnce({
-          ok: true,
-          value: [mockTxHash, { ...mockIntent, feeAmount: partnerFeeAmount.amount }, '0x'],
-        });
-        vi.spyOn(WalletAbstractionService, 'getUserAbstractedWalletAddress').mockResolvedValueOnce(walletAddress);
-        vi.spyOn(IntentRelayApiService, 'submitTransaction').mockResolvedValueOnce({
-          success: true,
-          message: 'Transaction submitted successfully',
-        });
-        vi.spyOn(IntentRelayApiService, 'waitUntilIntentExecuted').mockResolvedValueOnce({
-          ok: true,
-          value: mockPacketData,
-        });
-        vi.spyOn(sodax.swaps, 'postExecution').mockResolvedValueOnce({
-          ok: true,
-          value: {
-            answer: 'OK',
-            intent_hash: mockTxHash,
-          },
-        });
-
-        const result = await sodax.swaps.swap({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBeDefined();
-          expect(result.value[0]).toBeDefined();
-          expect(result.value[1]).toEqual(mockIntent);
-        }
-        expect(sodax.swaps['createIntent']).toHaveBeenCalledWith({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-          fee: sodax.swaps.config.partnerFee,
-          raw: false,
-          skipSimulation: false,
-        });
-        expect(sodax.swaps['postExecution']).toHaveBeenCalledWith({
-          intent_tx_hash: mockTxHash,
-        });
-        expect(IntentRelayApiService.submitTransaction).toHaveBeenCalled();
-      });
-    });
-
-    describe('cancelIntent', () => {
-      let mockCreateIntentParams: CreateIntentParams;
-      let intent: Intent & FeeAmount;
-
-      beforeEach(async () => {
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-        mockCreateIntentParams = {
-          inputToken: bscEthToken,
-          outputToken: arbWbtcToken,
-          inputAmount: BigInt(1000000),
-          minOutputAmount: BigInt(900000),
-          deadline: BigInt(0),
-          allowPartialFill: false,
-          srcChain: BSC_MAINNET_CHAIN_ID,
-          dstChain: ARBITRUM_MAINNET_CHAIN_ID,
-          srcAddress: walletAddress,
-          dstAddress: walletAddress,
-          solver: '0x0000000000000000000000000000000000000000',
-          data: '0x',
-        } satisfies CreateIntentParams;
-
-        const mockCreatorHubWalletAddress = '0x1234567890123456789012345678901234567890';
-        const [, constructedIntent] = EvmSolverService.constructCreateIntentData(
-          mockCreateIntentParams,
-          mockCreatorHubWalletAddress,
-          solverConfig,
-          sodax.config,
-          partnerFeeAmount,
-        );
-        intent = { ...constructedIntent, feeAmount: partnerFeeAmount.amount } satisfies Intent & FeeAmount;
-      });
-
-      it('should successfully cancel an intent for EVM chain', async () => {
-        const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-        vi.spyOn(sodax.swaps, 'cancelIntent').mockResolvedValueOnce({
-          ok: true,
-          value: mockTxHash,
-        });
-        const result = await sodax.swaps.cancelIntent(intent, mockBscSpokeProvider);
-
-        expect(result.ok).toBe(true);
-        expect(result.ok && result.value).toBe(mockTxHash);
-      });
-    });
-
-    describe('getIntent', () => {
-      let mockCreateIntentParams: CreateIntentParams;
-      let mockIntent: Intent & FeeAmount;
-
-      beforeEach(async () => {
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-        mockCreateIntentParams = {
-          inputToken: bscEthToken,
-          outputToken: arbWbtcToken,
-          inputAmount: BigInt(1000000),
-          minOutputAmount: BigInt(900000),
-          deadline: BigInt(0),
-          allowPartialFill: false,
-          srcChain: BSC_MAINNET_CHAIN_ID,
-          dstChain: ARBITRUM_MAINNET_CHAIN_ID,
-          srcAddress: walletAddress,
-          dstAddress: walletAddress,
-          solver: '0x0000000000000000000000000000000000000000',
-          data: '0x',
-        } satisfies CreateIntentParams;
-
-        const creatorAddress = await mockBscSpokeProvider.walletProvider.getWalletAddress();
-        const walletAddressBytes = encodeAddress(BSC_MAINNET_CHAIN_ID, walletAddress);
-        mockIntent = {
-          intentId: BigInt(1),
-          creator: creatorAddress,
-          inputToken:
-            sodax.config.getHubAssetInfo(mockCreateIntentParams.srcChain, mockCreateIntentParams.inputToken)?.asset ??
-            '0x',
-          outputToken:
-            sodax.config.getHubAssetInfo(mockCreateIntentParams.dstChain, mockCreateIntentParams.outputToken)?.asset ??
-            '0x',
-          inputAmount: mockCreateIntentParams.inputAmount,
-          minOutputAmount: mockCreateIntentParams.minOutputAmount,
-          deadline: mockCreateIntentParams.deadline,
-          allowPartialFill: mockCreateIntentParams.allowPartialFill,
-          srcChain: getIntentRelayChainId(mockCreateIntentParams.srcChain),
-          dstChain: getIntentRelayChainId(mockCreateIntentParams.dstChain),
-          srcAddress: walletAddressBytes,
-          dstAddress: walletAddressBytes,
-          solver: mockCreateIntentParams.solver,
-          data: mockCreateIntentParams.data,
-          feeAmount: partnerFeeAmount.amount,
-        } satisfies Intent & FeeAmount;
-      });
-
-      it('should successfully get an intent for EVM chain', async () => {
-        const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-        vi.spyOn(EvmSolverService, 'getIntent').mockResolvedValueOnce(mockIntent);
-        const result = await sodax.swaps.getIntent(mockTxHash);
-
-        expect(result).toEqual(mockIntent);
-      });
-
-      it('should should successfully get an intent for EVM chain and format src and dst chain ids using getSpokeChainIdFromIntentRelayChainId', async () => {
-        const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-        vi.spyOn(EvmSolverService, 'getIntent').mockResolvedValueOnce(mockIntent);
-        const result = await sodax.swaps.getIntent(mockTxHash);
-
-        expect(result).toEqual(mockIntent);
-        expect(mockCreateIntentParams.srcChain).toEqual(
-          sodax.config.getSpokeChainIdFromIntentRelayChainId(mockIntent.srcChain),
-        );
-        expect(mockCreateIntentParams.dstChain).toEqual(
-          sodax.config.getSpokeChainIdFromIntentRelayChainId(mockIntent.dstChain),
-        );
-      });
-    });
-
-    describe('isAllowanceValid', () => {
-      let mockCreateIntentParams: CreateIntentParams;
-
-      beforeEach(async () => {
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-        mockCreateIntentParams = {
-          inputToken: bscEthToken,
-          outputToken: arbWbtcToken,
-          inputAmount: BigInt(1000000),
-          minOutputAmount: BigInt(900000),
-          deadline: BigInt(0),
-          allowPartialFill: false,
-          srcChain: BSC_MAINNET_CHAIN_ID,
-          dstChain: ARBITRUM_MAINNET_CHAIN_ID,
-          srcAddress: walletAddress,
-          dstAddress: walletAddress,
-          solver: '0x0000000000000000000000000000000000000000',
-          data: '0x',
-        } satisfies CreateIntentParams;
-      });
-
-      it('should return true when allowance is sufficient', async () => {
-        vi.spyOn(sodax.swaps, 'isAllowanceValid').mockResolvedValueOnce({
-          ok: true,
-          value: true,
-        });
-
-        const result = await sodax.swaps.isAllowanceValid({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBe(true);
-        }
-      });
-
-      it('should return false when allowance is insufficient', async () => {
-        vi.spyOn(sodax.swaps, 'isAllowanceValid').mockResolvedValueOnce({
-          ok: true,
-          value: false,
-        });
-
-        const result = await sodax.swaps.isAllowanceValid({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBe(false);
-        }
-      });
-
-      it('should handle errors', async () => {
-        const mockError = new Error('ERC20 service error');
-        vi.spyOn(sodax.swaps, 'isAllowanceValid').mockResolvedValueOnce({
-          ok: false,
-          error: mockError,
-        });
-
-        const result = await sodax.swaps.isAllowanceValid({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBe(mockError);
-        }
-      });
-    });
-
-    describe('approve', () => {
-      let mockCreateIntentParams: CreateIntentParams;
-
-      beforeEach(async () => {
-        const walletAddress = await mockEvmWalletProvider.getWalletAddress();
-        mockCreateIntentParams = {
-          inputToken: bscEthToken,
-          outputToken: arbWbtcToken,
-          inputAmount: BigInt(1000000),
-          minOutputAmount: BigInt(900000),
-          deadline: BigInt(0),
-          allowPartialFill: false,
-          srcChain: BSC_MAINNET_CHAIN_ID,
-          dstChain: ARBITRUM_MAINNET_CHAIN_ID,
-          srcAddress: walletAddress,
-          dstAddress: walletAddress,
-          solver: '0x0000000000000000000000000000000000000000',
-          data: '0x',
-        } satisfies CreateIntentParams;
-      });
-
-      it('should successfully approve tokens', async () => {
-        const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-        vi.spyOn(sodax.swaps, 'approve').mockResolvedValueOnce({
-          ok: true,
-          value: mockTxHash,
-        });
-
-        const result = await sodax.swaps.approve({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBe(mockTxHash);
-        }
-      });
-
-      it('should return raw transaction when raw parameter is true', async () => {
-        const mockRawTx = {
-          to: '0x...' as `0x${string}`,
-          data: '0x...' as `0x${string}`,
-          from: '0x...' as `0x${string}`,
-          value: 0n,
-        };
-        vi.spyOn(sodax.swaps, 'approve').mockResolvedValueOnce({
-          ok: true,
-          value: mockRawTx,
-        });
-
-        const result = await sodax.swaps.approve({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-          raw: true,
-        });
-
-        expect(result.ok).toBe(true);
-        if (result.ok) {
-          expect(result.value).toBe(mockRawTx);
-        }
-      });
-
-      it('should handle errors', async () => {
-        const mockError = new Error('ERC20 service error');
-        vi.spyOn(sodax.swaps, 'approve').mockResolvedValueOnce({
-          ok: false,
-          error: mockError,
-        });
-
-        const result = await sodax.swaps.approve({
-          intentParams: mockCreateIntentParams,
-          spokeProvider: mockBscSpokeProvider,
-        });
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toBe(mockError);
-        }
-      });
-    });
+  it('produces a NEW object when given an empty override (truthy ternary branch, even if no-op)', () => {
+    const sodax = new Sodax({});
+    // `{}` is truthy → deepMerge runs. Empty source means every key is preserved by reference,
+    // but the top-level result is a fresh `{ ...target }`. Pins the truthy-branch invariant.
+    expect(sodax.instanceConfig).not.toBe(sodaxConfig);
+    expect(sodax.instanceConfig).toEqual(sodaxConfig);
+  });
+
+  it('applies a top-level scalar override (fee: undefined → fee: { ... })', () => {
+    const fee = { address: '0x1111111111111111111111111111111111111111' as const, percentage: 100 };
+    const sodax = new Sodax({ fee });
+    expect(sodax.instanceConfig.fee).toEqual(fee);
+  });
+
+  it('applies a nested override while preserving sibling defaults under the same parent', () => {
+    const customTimeout = 99_999;
+    const sodax = new Sodax({ api: { timeout: customTimeout } });
+    expect(sodax.instanceConfig.api.timeout).toBe(customTimeout);
+    // baseURL was NOT touched by the override — must equal the default. Catches a deepMerge
+    // mutation that would replace the entire `api` object instead of merging key-by-key.
+    expect(sodax.instanceConfig.api.baseURL).toBe(sodaxConfig.api.baseURL);
+    expect(sodax.instanceConfig.api.headers).toEqual(sodaxConfig.api.headers);
+  });
+
+  it('leaves untouched top-level fields untouched (override one branch, others survive)', () => {
+    const fee = { address: '0x2222222222222222222222222222222222222222' as const, percentage: 50 };
+    const sodax = new Sodax({ fee });
+    // `chains` was not in the source — deepMerge preserves the reference, not just deep equality.
+    expect(sodax.instanceConfig.chains).toBe(sodaxConfig.chains);
+    expect(sodax.instanceConfig.relay).toBe(sodaxConfig.relay);
+    expect(sodax.instanceConfig.api).toBe(sodaxConfig.api);
+  });
+
+  it('does not mutate the imported sodaxConfig default when an override is applied', () => {
+    const before = sodaxConfig.fee;
+    new Sodax({ fee: { address: '0x3333333333333333333333333333333333333333', percentage: 25 } });
+    // Critical immutability invariant — the singleton default must remain pristine across
+    // instances. Catches a deepMerge mutation that writes into `target` instead of cloning.
+    expect(sodaxConfig.fee).toBe(before);
+  });
+});
+
+// =========================================================================
+// Sub-services — every public field is wired to the right collaborator
+// =========================================================================
+//
+// The fake classes set `__type` to the canonical class name. Asserting `__type` is a stronger
+// signal than `instanceof` because it directly catches a mutation that swaps two `new XService(...)`
+// lines (e.g. `this.swaps = new MoneyMarketService(...)`) — instanceof would still pass since
+// both fakes share `Object` as their ultimate prototype, but `__type` would not.
+
+describe('Sodax constructor — sub-services are instantiated as the correct class', () => {
+  const FIELDS = [
+    ['backendApi', 'BackendApiService'],
+    ['config', 'ConfigService'],
+    ['hubProvider', 'EvmHubProvider'],
+    ['spokeService', 'SpokeService'],
+    ['swaps', 'SwapService'],
+    ['moneyMarket', 'MoneyMarketService'],
+    ['dex', 'DexService'],
+    ['migration', 'MigrationService'],
+    ['bridge', 'BridgeService'],
+    ['staking', 'StakingService'],
+    ['partners', 'PartnerService'],
+    ['recovery', 'RecoveryService'],
+  ] as const;
+
+  it.each(FIELDS)('sodax.%s is a %s instance', (field, expectedType) => {
+    const sodax = new Sodax();
+    const instance = (sodax as unknown as Record<string, unknown>)[field];
+    expect(asFake(instance).__type).toBe(expectedType);
+  });
+});
+
+// =========================================================================
+// Dependency wiring — exactly which args reach each constructor
+// =========================================================================
+
+describe('Sodax constructor — dependency wiring', () => {
+  it('BackendApiService receives instanceConfig.api (the merged value, not the raw default)', () => {
+    const sodax = new Sodax();
+    // Sodax passes the post-merge `instanceConfig.api`. Because no override was given this is
+    // referentially equal to `sodaxConfig.api`, but the SOURCE is the merged config — verified
+    // by the override-propagation test below.
+    expect(helpers.captured.backendApi).toHaveLength(1);
+    expect(helpers.captured.backendApi[0]).toBe(sodax.instanceConfig.api);
+  });
+
+  it('ConfigService receives { api: <BackendApiService instance>, config: instanceConfig }', () => {
+    const sodax = new Sodax();
+    expect(helpers.captured.config).toHaveLength(1);
+    const args = helpers.captured.config[0] as { api: unknown; config: unknown };
+    expect(args.api).toBe(sodax.backendApi);
+    expect(args.config).toBe(sodax.instanceConfig);
+  });
+
+  it('EvmHubProvider receives { config: <ConfigService instance> }', () => {
+    const sodax = new Sodax();
+    expect(helpers.captured.evmHub).toHaveLength(1);
+    const args = helpers.captured.evmHub[0] as { config: unknown };
+    expect(args.config).toBe(sodax.config);
+  });
+
+  it('SpokeService receives { config, hubProvider } pointing at the same Sodax-owned instances', () => {
+    const sodax = new Sodax();
+    expect(helpers.captured.spokeService).toHaveLength(1);
+    const args = helpers.captured.spokeService[0] as { config: unknown; hubProvider: unknown };
+    expect(args.config).toBe(sodax.config);
+    expect(args.hubProvider).toBe(sodax.hubProvider);
+  });
+
+  // The downstream services all take the same { config, hubProvider, spoke } triple. We check
+  // each one independently — a mutation that drops one field on, say, `MoneyMarketService` but
+  // not on `SwapService` is exactly the kind of regression a parameterized test catches.
+  const TRIPLE_SERVICES = [
+    ['swap', 'swaps'],
+    ['moneyMarket', 'moneyMarket'],
+    ['dex', 'dex'],
+    ['migration', 'migration'],
+    ['bridge', 'bridge'],
+    ['staking', 'staking'],
+    ['partner', 'partners'],
+    ['recovery', 'recovery'],
+  ] as const;
+
+  it.each(TRIPLE_SERVICES)(
+    '%s service receives { config, hubProvider, spoke } pointing at the shared instances',
+    (sinkKey, fieldName) => {
+      const sodax = new Sodax();
+      const sink = helpers.captured[sinkKey];
+      expect(sink).toHaveLength(1);
+      const args = sink[0] as { config: unknown; hubProvider: unknown; spoke: unknown };
+      expect(args.config).toBe(sodax.config);
+      expect(args.hubProvider).toBe(sodax.hubProvider);
+      expect(args.spoke).toBe(sodax.spokeService);
+      // Defensive: also pin that the field-name → sink-name mapping is correct so a mutation
+      // that swaps `this.swaps = new SwapService(...)` and `this.moneyMarket = new MoneyMarket(...)`
+      // gets caught.
+      expect((sodax as unknown as Record<string, FakeInstance>)[fieldName].__args).toBe(args);
+    },
+  );
+
+  it('shares ONE config instance across every service that needs it', () => {
+    const sodax = new Sodax();
+    const allConfigArgs = [
+      (helpers.captured.evmHub[0] as { config: unknown }).config,
+      (helpers.captured.spokeService[0] as { config: unknown }).config,
+      (helpers.captured.swap[0] as { config: unknown }).config,
+      (helpers.captured.moneyMarket[0] as { config: unknown }).config,
+      (helpers.captured.dex[0] as { config: unknown }).config,
+      (helpers.captured.migration[0] as { config: unknown }).config,
+      (helpers.captured.bridge[0] as { config: unknown }).config,
+      (helpers.captured.staking[0] as { config: unknown }).config,
+      (helpers.captured.partner[0] as { config: unknown }).config,
+      (helpers.captured.recovery[0] as { config: unknown }).config,
+    ];
+    for (const cfg of allConfigArgs) expect(cfg).toBe(sodax.config);
+  });
+
+  it('shares ONE hubProvider instance across every service that needs it', () => {
+    const sodax = new Sodax();
+    const allHubArgs = [
+      (helpers.captured.spokeService[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.swap[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.moneyMarket[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.dex[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.migration[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.bridge[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.staking[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.partner[0] as { hubProvider: unknown }).hubProvider,
+      (helpers.captured.recovery[0] as { hubProvider: unknown }).hubProvider,
+    ];
+    for (const hub of allHubArgs) expect(hub).toBe(sodax.hubProvider);
+  });
+
+  it('shares ONE spokeService instance across every service that needs it', () => {
+    const sodax = new Sodax();
+    const allSpokeArgs = [
+      (helpers.captured.swap[0] as { spoke: unknown }).spoke,
+      (helpers.captured.moneyMarket[0] as { spoke: unknown }).spoke,
+      (helpers.captured.dex[0] as { spoke: unknown }).spoke,
+      (helpers.captured.migration[0] as { spoke: unknown }).spoke,
+      (helpers.captured.bridge[0] as { spoke: unknown }).spoke,
+      (helpers.captured.staking[0] as { spoke: unknown }).spoke,
+      (helpers.captured.partner[0] as { spoke: unknown }).spoke,
+      (helpers.captured.recovery[0] as { spoke: unknown }).spoke,
+    ];
+    for (const spoke of allSpokeArgs) expect(spoke).toBe(sodax.spokeService);
+  });
+});
+
+// =========================================================================
+// Override propagation — overrides must reach the downstream constructors
+// =========================================================================
+
+describe('Sodax constructor — config override propagates downstream', () => {
+  it('a partial { api: { timeout } } override reaches BackendApiService at construction time', () => {
+    const customTimeout = 12_345;
+    const sodax = new Sodax({ api: { timeout: customTimeout } });
+    const backendApiArg = helpers.captured.backendApi[0] as { timeout: number };
+    expect(backendApiArg.timeout).toBe(customTimeout);
+    // The arg passed to BackendApiService must be `instanceConfig.api`, not `sodaxConfig.api`.
+    expect(backendApiArg).toBe(sodax.instanceConfig.api);
+  });
+
+  it('the merged instanceConfig (not the raw default) is what ConfigService stores', () => {
+    const fee = { address: '0x4444444444444444444444444444444444444444' as const, percentage: 75 };
+    const sodax = new Sodax({ fee });
+    const configArg = helpers.captured.config[0] as { config: SodaxConfig };
+    expect(configArg.config).toBe(sodax.instanceConfig);
+    expect(configArg.config.fee).toEqual(fee);
+  });
+});
+
+// =========================================================================
+// initialize() — single-line delegation to config.initialize()
+// =========================================================================
+
+describe('Sodax.initialize', () => {
+  it('delegates to config.initialize and propagates its ok:true result unchanged', async () => {
+    const expected: Result<void> = { ok: true, value: undefined };
+    helpers.captured.configInitialize.mockResolvedValueOnce(expected);
+
+    const sodax = new Sodax();
+    const result = await sodax.initialize();
+
+    // Identity (`toBe`) — the facade returns the awaited promise's value as-is, no re-wrapping.
+    expect(result).toBe(expected);
+    expect(helpers.captured.configInitialize).toHaveBeenCalledTimes(1);
+    expect(helpers.captured.configInitialize).toHaveBeenCalledWith();
+  });
+
+  it('propagates an ok:false result returned by config.initialize', async () => {
+    const failure: Result<void> = { ok: false, error: new Error('config init failed') };
+    helpers.captured.configInitialize.mockResolvedValueOnce(failure);
+
+    const sodax = new Sodax();
+    const result = await sodax.initialize();
+
+    expect(result).toBe(failure);
+  });
+
+  it('invokes config.initialize exactly once per call (no retry, no extra args)', async () => {
+    helpers.captured.configInitialize.mockResolvedValue({ ok: true, value: undefined });
+    const sodax = new Sodax();
+
+    await sodax.initialize();
+    expect(helpers.captured.configInitialize).toHaveBeenCalledTimes(1);
+
+    await sodax.initialize();
+    expect(helpers.captured.configInitialize).toHaveBeenCalledTimes(2);
+    // Both invocations must pass zero arguments — the facade does not synthesize any.
+    for (const call of helpers.captured.configInitialize.mock.calls) {
+      expect(call).toEqual([]);
+    }
+  });
+});
+
+// =========================================================================
+// Multiple-instance isolation
+// =========================================================================
+
+describe('Sodax — multiple instances', () => {
+  it('two new Sodax() calls produce independent service instances', () => {
+    const a = new Sodax();
+    const b = new Sodax();
+    // Identity, not just equality — each `new Sodax()` MUST produce a fresh facade. A mutation
+    // that turned a public field into a static singleton would break this.
+    expect(a).not.toBe(b);
+    expect(a.config).not.toBe(b.config);
+    expect(a.hubProvider).not.toBe(b.hubProvider);
+    expect(a.spokeService).not.toBe(b.spokeService);
+    expect(a.swaps).not.toBe(b.swaps);
+  });
+
+  it('an override on one instance does not leak into a sibling constructed without overrides', () => {
+    const fee = { address: '0x5555555555555555555555555555555555555555' as const, percentage: 10 };
+    const overridden = new Sodax({ fee });
+    const defaulted = new Sodax();
+
+    expect(overridden.instanceConfig.fee).toEqual(fee);
+    expect(defaulted.instanceConfig.fee).toBeUndefined();
+    expect(defaulted.instanceConfig).toBe(sodaxConfig);
   });
 });

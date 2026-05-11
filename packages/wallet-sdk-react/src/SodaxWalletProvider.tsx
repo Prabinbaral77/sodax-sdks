@@ -1,120 +1,44 @@
 'use client';
 
-// biome-ignore lint/style/useImportType: <explanation>
-import React, { useMemo } from 'react';
+import { type ReactNode, useRef } from 'react';
 
-// sui
-import { SuiClientProvider, WalletProvider as SuiWalletProvider } from '@mysten/dapp-kit';
-import { getFullnodeUrl } from '@mysten/sui/client';
-
-// evm
-import { WagmiProvider } from 'wagmi';
-
-// solana
-import {
-  ConnectionProvider as SolanaConnectionProvider,
-  WalletProvider as SolanaWalletProvider,
-} from '@solana/wallet-adapter-react';
-import { UnsafeBurnerWalletAdapter } from '@solana/wallet-adapter-wallets';
-
-// aleo
-import { AleoWalletProvider } from '@provablehq/aleo-wallet-adaptor-react';
-import { PuzzleWalletAdapter } from '@provablehq/aleo-wallet-adaptor-puzzle';
-import { ShieldWalletAdapter } from '@provablehq/aleo-wallet-adaptor-shield';
-import { LeoWalletAdapter } from '@provablehq/aleo-wallet-adaptor-leo';
-import { DecryptPermission } from '@provablehq/aleo-wallet-adaptor-core';
-
-import type { RpcConfig } from '@sodax/types';
-
-import { Hydrate } from './Hydrate';
-import { createWagmiConfig } from './xchains/evm/EvmXService';
-import { AleoXService } from './xchains/aleo';
-import { reconnectIcon } from './xchains/icon/actions';
-import { reconnectInjective } from './xchains/injective/actions';
-import { reconnectStellar } from './xchains/stellar/actions';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { State as WagmiState } from 'wagmi';
-
-const queryClient = new QueryClient();
-
-export type WagmiOptions = {
-  reconnectOnMount?: boolean;
-  ssr?: boolean;
-};
-
-export type SodaxWalletProviderOptions = {
-  wagmi?: WagmiOptions;
-  solana?: {
-    autoConnect?: boolean;
-  };
-  sui?: {
-    autoConnect?: boolean;
-  };
-};
-
-const defaultOptions = {
-  wagmi: {
-    reconnectOnMount: false,
-    ssr: true,
-  },
-  solana: {
-    autoConnect: true,
-  },
-  sui: {
-    autoConnect: true,
-  },
-} satisfies SodaxWalletProviderOptions;
+import type { SodaxWalletConfig } from './types/config.js';
+import { WalletConfigProvider } from './context/WalletConfigContext.js';
+import { EvmProvider } from './providers/evm/index.js';
+import { SolanaProvider } from './providers/solana/index.js';
+import { SuiProvider } from './providers/sui/index.js';
+import { useInitChainServices } from './hooks/useInitChainServices.js';
 
 export type SodaxWalletProviderProps = {
-  children: React.ReactNode;
-  rpcConfig: RpcConfig;
-  options?: SodaxWalletProviderOptions;
-  initialState?: WagmiState;
+  children: ReactNode;
+  /**
+   * Captured once on mount. Dynamic changes require remounting `SodaxWalletProvider`
+   * — passing a new reference on subsequent renders has no effect.
+   */
+  config: SodaxWalletConfig;
 };
 
-export const SodaxWalletProvider = ({ children, rpcConfig, options, initialState }: SodaxWalletProviderProps) => {
-  const wagmi = useMemo(() => ({ ...defaultOptions.wagmi, ...options?.wagmi }), [options?.wagmi]);
-  const wagmiConfig = useMemo(() => {
-    return createWagmiConfig(rpcConfig, wagmi);
-  }, [rpcConfig, wagmi]);
+export const SodaxWalletProvider = ({ children, config }: SodaxWalletProviderProps) => {
+  // Freeze config on first render so context, store, and wagmi all share one snapshot
+  // and unstable parent references can't trigger re-init.
+  const configRef = useRef<SodaxWalletConfig>(config);
+  const frozen = configRef.current;
 
-  useMemo(() => {
-    const aleoRpcUrl = rpcConfig['aleo'];
-    if (aleoRpcUrl) {
-      AleoXService.getInstance().setRpcUrl(aleoRpcUrl);
-    }
-  }, [rpcConfig]);
+  useInitChainServices(frozen);
 
-  const solanaWallets = useMemo(() => [new UnsafeBurnerWalletAdapter()], []);
-  const aleoWallets = useMemo(() => [new LeoWalletAdapter(), new PuzzleWalletAdapter(), new ShieldWalletAdapter()], []);
-  const solana = useMemo(() => ({ ...defaultOptions.solana, ...options?.solana }), [options?.solana]);
-  const sui = useMemo(() => ({ ...defaultOptions.sui, ...options?.sui }), [options?.sui]);
+  let content = <>{children}</>;
 
-  return (
-    <QueryClientProvider client={queryClient}>
-      <WagmiProvider reconnectOnMount={wagmi.reconnectOnMount} config={wagmiConfig} initialState={initialState}>
-        <SuiClientProvider networks={{ mainnet: { url: getFullnodeUrl('mainnet') } }} defaultNetwork="mainnet">
-          <SuiWalletProvider autoConnect={sui.autoConnect}>
-            <SolanaConnectionProvider endpoint={rpcConfig['solana'] ?? 'https://api.mainnet-beta.solana.com'}>
-              <SolanaWalletProvider wallets={solanaWallets} autoConnect={solana.autoConnect}>
-                <AleoWalletProvider
-                  wallets={aleoWallets}
-                  autoConnect={true}
-                  decryptPermission={DecryptPermission.NoDecrypt}
-                  programs={[]}
-                >
-                  <Hydrate rpcConfig={rpcConfig} />
-                  {children}
-                </AleoWalletProvider>
-              </SolanaWalletProvider>
-            </SolanaConnectionProvider>
-          </SuiWalletProvider>
-        </SuiClientProvider>
-      </WagmiProvider>
-    </QueryClientProvider>
-  );
+  if (frozen.SOLANA) {
+    content = <SolanaProvider config={frozen.SOLANA}>{content}</SolanaProvider>;
+  }
+
+  if (frozen.SUI) {
+    content = <SuiProvider config={frozen.SUI}>{content}</SuiProvider>;
+  }
+
+  if (frozen.EVM) {
+    content = <EvmProvider config={frozen.EVM}>{content}</EvmProvider>;
+  }
+
+  return <WalletConfigProvider value={frozen}>{content}</WalletConfigProvider>;
 };
-
-reconnectIcon();
-reconnectInjective();
-reconnectStellar();

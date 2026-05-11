@@ -1,50 +1,43 @@
 // packages/dapp-kit/src/hooks/staking/useInstantUnstake.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import type { SpokeProvider, InstantUnstakeParams } from '@sodax/sdk';
+import type { InstantUnstakeAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
+
+export type UseInstantUnstakeVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  InstantUnstakeAction<K, false>,
+  'raw'
+>;
 
 /**
- * Hook for executing instant unstake operations.
- * Uses React Query for efficient state management and error handling.
+ * React hook for instant-unstaking SODA (bypassing the waiting period at a slippage cost).
  *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider for the transaction
- * @returns {UseMutationResult<[string, string], Error, Omit<InstantUnstakeParams, 'action'>>} Mutation result object containing instant unstake state and methods
- *
- * @example
- * ```typescript
- * const { mutateAsync: instantUnstake, isPending } = useInstantUnstake(spokeProvider);
- *
- * const handleInstantUnstake = async () => {
- *   const result = await instantUnstake({
- *     amount: 1000000000000000000n,
- *     minAmount: 950000000000000000n,
- *     account: '0x...'
- *   });
- *   console.log('Instant unstake successful:', result);
- * };
- * ```
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useInstantUnstake(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<[string, string], Error, Omit<InstantUnstakeParams, 'action'>> {
+export function useInstantUnstake<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseInstantUnstakeVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseInstantUnstakeVars<K>
+> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async (params: Omit<InstantUnstakeParams, 'action'>) => {
-      if (!spokeProvider) {
-        throw new Error('spokeProvider is not found');
-      }
-
-      const result = await sodax.staking.instantUnstake({ ...params, action: 'instantUnstake' }, spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Instant unstake failed: ${result.error.code}`);
-      }
-
-      return result.value;
-    },
-    onError: error => {
-      console.error('Instant unstake error:', error);
+  return useSafeMutation<TxHashPair, Error, UseInstantUnstakeVars<K>>({
+    mutationKey: ['staking', 'instantUnstake'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.staking.instantUnstake({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['staking', 'info', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'instantUnstakeRatio'] });
+      queryClient.invalidateQueries({ queryKey: ['staking', 'allowance', params.srcChainKey, 'instantUnstake'] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

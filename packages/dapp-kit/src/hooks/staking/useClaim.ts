@@ -1,46 +1,37 @@
 // packages/dapp-kit/src/hooks/staking/useClaim.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { ClaimParams, SpokeTxHash, HubTxHash, SpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+import type { ClaimAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
+
+export type UseClaimVars<K extends SpokeChainKey = SpokeChainKey> = Omit<ClaimAction<K, false>, 'raw'>;
 
 /**
- * Hook for executing claim transactions to claim unstaked SODA tokens after the unstaking period.
- * Uses React Query's useMutation for better state management and caching.
+ * React hook for claiming an unstaked SODA request that has reached the end of its waiting period.
  *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the claim
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<ClaimParams, 'action'>>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: claim, isPending } = useClaim(spokeProvider);
- *
- * const handleClaim = async () => {
- *   const result = await claim({
- *     requestId: 1n
- *   });
- *
- *   console.log('Claim successful:', result);
- * };
- * ```
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useClaim(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<[SpokeTxHash, HubTxHash], Error, Omit<ClaimParams, 'action'>> {
+export function useClaim<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseClaimVars<K>> = {}): SafeUseMutationResult<TxHashPair, Error, UseClaimVars<K>> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<[SpokeTxHash, HubTxHash], Error, Omit<ClaimParams, 'action'>>({
-    mutationFn: async (params: Omit<ClaimParams, 'action'>) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-
-      const result = await sodax.staking.claim({ ...params, action: 'claim' }, spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Claim failed: ${result.error.code}`);
-      }
-
-      return result.value;
+  return useSafeMutation<TxHashPair, Error, UseClaimVars<K>>({
+    mutationKey: ['staking', 'claim'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.staking.claim({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['staking', 'unstakingInfo', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['staking', 'unstakingInfoWithPenalty', params.srcChainKey, params.srcAddress],
+      });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

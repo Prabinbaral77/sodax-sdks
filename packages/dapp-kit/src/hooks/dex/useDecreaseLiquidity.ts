@@ -1,78 +1,52 @@
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import type {
-  ConcentratedLiquidityDecreaseLiquidityParams,
-  HubTxHash,
-  SpokeProvider,
-  SpokeTxHash,
-} from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
-
-export type UseDecreaseLiquidityParams = {
-  params: ConcentratedLiquidityDecreaseLiquidityParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/dex/useDecreaseLiquidity.ts
+import type { ClLiquidityDecreaseLiquidityAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * React hook that provides a mutation for decreasing liquidity in a concentrated liquidity position.
- *
- * This hook returns a mutation for removing liquidity from a position using the provided
- * `ConcentratedLiquidityDecreaseLiquidityParams` and `SpokeProvider`. The mutation returns a tuple of
- * the spoke transaction hash and the hub transaction hash upon success.
- *
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDecreaseLiquidityParams>}
- *   React Query mutation result:
- *   - `mutateAsync({ params, spokeProvider })`: Triggers the decrease liquidity mutation.
- *   - On success, returns `[spokeTxHash, hubTxHash]`.
- *   - On failure, throws an error.
- *
- * @example
- * ```typescript
- * const { mutateAsync: decreaseLiquidity, isPending, error } = useDecreaseLiquidity();
- *
- * await decreaseLiquidity({
- *   params: {
- *     poolKey,
- *     tokenId: 123n,
- *     liquidity: 100000n,
- *     amount0Min: 0n,
- *     amount1Min: 0n,
- *   },
- *   spokeProvider,
- * });
- * ```
- *
- * @param {UseDecreaseLiquidityParams} variables
- *   - `params`: Parameters for the decrease liquidity operation, matching `ConcentratedLiquidityDecreaseLiquidityParams`.
- *   - `spokeProvider`: The provider instance for the target spoke chain.
- *
- * @remarks
- * - After a successful liquidity decrease, the hook will invalidate DEX pool balances and position info queries.
+ * Mutation variables for {@link useDecreaseLiquidity}. Generic over `K extends SpokeChainKey`
+ * (defaults to the full union). Sophisticated callers can lock K at the hook call site to narrow
+ * the `walletProvider` and `params.srcChainKey` types.
  */
-export function useDecreaseLiquidity(): UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDecreaseLiquidityParams> {
+export type UseDecreaseLiquidityVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  ClLiquidityDecreaseLiquidityAction<K, false>,
+  'raw'
+>;
+
+/**
+ * React hook for decreasing liquidity in an existing concentrated-liquidity position.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useDecreaseLiquidity<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseDecreaseLiquidityVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseDecreaseLiquidityVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ params, spokeProvider }: UseDecreaseLiquidityParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider is required');
-      }
-
-      const decreaseResult = await sodax.dex.clService.decreaseLiquidity({
-        params,
-        spokeProvider,
+  return useSafeMutation<TxHashPair, Error, UseDecreaseLiquidityVars<K>>({
+    mutationKey: ['dex', 'decreaseLiquidity'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.dex.clService.decreaseLiquidity({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      // Decrease always targets a known position — scope invalidation to (tokenId, poolKey) instead
+      // of wiping all positions. `usePositionInfo` keys by string tokenId, so stringify the bigint
+      // here to keep the structural match.
+      queryClient.invalidateQueries({
+        queryKey: ['dex', 'positionInfo', params.tokenId.toString(), params.poolKey],
       });
-
-      if (!decreaseResult.ok) {
-        throw new Error(`Decrease liquidity failed: ${decreaseResult.error?.code || 'Unknown error'}`);
-      }
-
-      return decreaseResult.value;
-    },
-    onSuccess: () => {
-      // Invalidate relevant queries after successful liquidity decrease
-      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances'] });
-      queryClient.invalidateQueries({ queryKey: ['dex', 'positionInfo'] });
+      queryClient.invalidateQueries({ queryKey: ['dex', 'poolData', params.poolKey] });
+      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances', params.srcChainKey, params.srcAddress] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

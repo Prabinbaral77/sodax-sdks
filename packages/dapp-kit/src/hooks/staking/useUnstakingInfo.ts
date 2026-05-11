@@ -1,53 +1,41 @@
-// packages/dapp-kit/src/hooks/staking/useUnstakingInfoWithPenalty.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { UnstakingInfo, SpokeProvider } from '@sodax/sdk';
+import type { UnstakingInfo } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { ReadHookParams } from '../shared/types.js';
+
+export type UseUnstakingInfoParams = ReadHookParams<
+  UnstakingInfo,
+  {
+    srcAddress: `0x${string}` | undefined;
+    srcChainKey: SpokeChainKey | undefined;
+  }
+>;
 
 /**
- * Hook for fetching unstaking information from the stakedSoda contract.
- * Uses React Query for efficient caching and state management.
- *
- * @param {string | undefined} userAddress - The user address to fetch unstaking info for
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider instance
- * @param {number} refetchInterval - The interval in milliseconds to refetch data (default: 5000)
- * @returns {UseQueryResult<UnstakingInfo, Error>} Query result object containing unstaking info and state
- *
- * @example
- * ```typescript
- * const { data: unstakingInfo, isLoading, error } = useUnstakingInfo(userAddress, spokeProvider);
- *
- * if (isLoading) return <div>Loading unstaking info...</div>;
- * if (unstakingInfo) {
- *   console.log('Total unstaking:', unstakingInfo.totalUnstaking);
- *   unstakingInfo.userUnstakeSodaRequests.forEach(request => {
- *     console.log('Request amount:', request.request.amount);
- *   });
- * }
- * ```
+ * React hook to fetch the user's pending unstake requests by deriving the hub wallet from the
+ * spoke `srcAddress` + `srcChainKey`. Throws on `!ok`.
  */
-export function useUnstakingInfo(
-  userAddress: string | undefined,
-  spokeProvider: SpokeProvider | undefined,
-  refetchInterval = 5000,
-): UseQueryResult<UnstakingInfo, Error> {
+export function useUnstakingInfo({
+  params,
+  queryOptions,
+}: UseUnstakingInfoParams = {}): UseQueryResult<UnstakingInfo, Error> {
   const { sodax } = useSodaxContext();
+  const srcAddress = params?.srcAddress;
+  const srcChainKey = params?.srcChainKey;
 
-  return useQuery({
-    queryKey: ['soda', 'unstakingInfoWithPenalty', spokeProvider?.chainConfig.chain.id, userAddress],
+  return useQuery<UnstakingInfo, Error>({
+    queryKey: ['staking', 'unstakingInfo', srcChainKey, srcAddress],
     queryFn: async () => {
-      if (!spokeProvider || !userAddress) {
-        throw new Error('Spoke provider or user address not found');
+      if (!srcAddress || !srcChainKey) {
+        throw new Error('srcAddress and srcChainKey are required');
       }
-
-      const result = await sodax.staking.getUnstakingInfo(spokeProvider);
-
-      if (!result.ok) {
-        throw new Error(`Failed to fetch unstaking info: ${result.error.code}`);
-      }
-
+      const result = await sodax.staking.getUnstakingInfo(srcAddress, srcChainKey);
+      if (!result.ok) throw result.error;
       return result.value;
     },
-    enabled: !!spokeProvider && !!userAddress,
-    refetchInterval,
+    enabled: !!srcAddress && !!srcChainKey,
+    refetchInterval: 5_000,
+    ...queryOptions,
   });
 }

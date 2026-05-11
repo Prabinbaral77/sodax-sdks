@@ -1,44 +1,35 @@
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { Intent, Result, SpokeProvider, TxReturnType } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+// packages/dapp-kit/src/hooks/swap/useCancelSwap.ts
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { GetWalletProviderType, Intent, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
-type CancelIntentParams = {
+type CancelIntentParams<K extends SpokeChainKey = SpokeChainKey> = {
+  srcChainKey: K;
+  walletProvider: GetWalletProviderType<K>;
   intent: Intent;
-  raw?: boolean;
 };
 
-type CancelIntentResult = Result<TxReturnType<SpokeProvider, boolean>>;
-
 /**
- * Hook for canceling a swap intent order.
- * Uses React Query's useMutation for better state management and caching.
+ * React hook for cancelling an in-flight swap intent.
  *
- * @param {SpokeProvider} spokeProvider - The spoke provider to use for canceling the intent
- * @returns {UseMutationResult} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: cancelSwap, isPending } = useCancelSwap(spokeProvider);
- *
- * const handleCancelSwap = async () => {
- *   const result = await cancelSwap({
- *     intent: intentObject,
- *     raw: false // optional, defaults to false
- *   });
- * };
- * ```
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  */
-export function useCancelSwap(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<CancelIntentResult, Error, CancelIntentParams> {
+export function useCancelSwap({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, CancelIntentParams> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  CancelIntentParams
+> {
   const { sodax } = useSodaxContext();
 
-  return useMutation<CancelIntentResult, Error, CancelIntentParams>({
-    mutationFn: async ({ intent, raw = false }: CancelIntentParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-      return sodax.swaps.cancelIntent(intent, spokeProvider, raw);
-    },
+  return useSafeMutation<TxHashPair, Error, CancelIntentParams>({
+    mutationKey: ['swap', 'cancel'],
+    ...mutationOptions,
+    mutationFn: async ({ srcChainKey, walletProvider, intent }) =>
+      unwrapResult(await sodax.swaps.cancelIntent({ params: { srcChainKey, intent }, walletProvider })),
   });
 }

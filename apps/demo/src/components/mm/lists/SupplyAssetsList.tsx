@@ -1,18 +1,19 @@
-import React, { useEffect, useMemo, useState, type ReactElement } from 'react';
+import React, { useMemo, useState, type ReactElement } from 'react';
 import {
   useReservesUsdFormat,
-  useSpokeProvider,
+  useSodaxContext,
   useUserFormattedSummary,
   useUserReservesData,
   useATokensBalances,
+  useXBalances,
 } from '@sodax/dapp-kit';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useWalletProvider, useXAccount, useXBalances } from '@sodax/wallet-sdk-react';
+import { getXChainType, useXAccount, useXService } from '@sodax/wallet-sdk-react';
 import { formatUnits, isAddress } from 'viem';
 import { SupplyAssetsListItem } from './SupplyAssetsListItem';
 import { useAppStore } from '@/zustand/useAppStore';
-import { type ChainId, ICON_MAINNET_CHAIN_ID, moneyMarketSupportedTokens, type XToken } from '@sodax/sdk';
+import { ChainKeys, type XToken } from '@sodax/sdk';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Info } from 'lucide-react';
 import { SupplyModal } from './SupplyModal';
@@ -32,44 +33,49 @@ const TABLE_HEADERS = [
 
 export function SupplyAssetsList(): ReactElement {
   const { selectedChainId } = useAppStore();
+  const { sodax } = useSodaxContext();
 
   const [withdrawData, setWithdrawData] = useState<{
     token: XToken;
     maxWithdraw: string;
+    isHfLimited: boolean;
   } | null>(null);
   const [supplyData, setSupplyData] = useState<{
     token: XToken;
-    maxSupply: string;
   } | null>(null);
 
-  const tokens = moneyMarketSupportedTokens[selectedChainId] ?? [];
-  const isIcon = selectedChainId === ICON_MAINNET_CHAIN_ID;
+  const tokens = sodax.moneyMarket.getSupportedTokensByChainId(selectedChainId);
+  const isIcon = selectedChainId === ChainKeys.ICON_MAINNET;
 
-  const { address } = useXAccount(selectedChainId);
-  const walletProvider = useWalletProvider(selectedChainId);
-  const spokeProvider = useSpokeProvider(selectedChainId, walletProvider);
+  const { address } = useXAccount({ xChainId: selectedChainId });
+  const xService = useXService({ xChainType: getXChainType(selectedChainId) });
   const {
     data: balances,
     isLoading: isBalancesLoading,
     refetch: refetchWalletBalances,
   } = useXBalances({
-    xChainId: selectedChainId,
-    xTokens: tokens,
-    address,
+    params: {
+      xService,
+      xChainId: selectedChainId,
+      xTokens: tokens,
+      address,
+    },
   });
 
   const {
     data: userReservesData,
     isLoading: isUserReservesLoading,
     refetch: refetchReserves,
-  } = useUserReservesData({ spokeChainId: selectedChainId, userAddress: address });
+  } = useUserReservesData({ params: { spokeChainKey: selectedChainId, userAddress: address } });
   const userReserves = userReservesData?.[0] || [];
   const {
     data: formattedReserves,
     isLoading: isFormattedReservesLoading,
     refetch: refetchFormattedReserves,
   } = useReservesUsdFormat();
-  const { data: userSummary, refetch: refetchSummary } = useUserFormattedSummary({ spokeChainId: selectedChainId, userAddress: address });
+  const { data: userSummary, refetch: refetchSummary } = useUserFormattedSummary({
+    params: { spokeChainKey: selectedChainId, userAddress: address },
+  });
   const healthFactorRaw = userSummary?.healthFactor ? Number(userSummary.healthFactor) : undefined;
 
   const healthFactorDisplay =
@@ -91,9 +97,11 @@ export function SupplyAssetsList(): ReactElement {
     isLoading: isATokensLoading,
     refetch: refetchBalances,
   } = useATokensBalances({
-    aTokens: aTokenAddresses,
-    spokeProvider,
-    userAddress: address,
+    params: {
+      aTokens: aTokenAddresses,
+      spokeChainKey: selectedChainId,
+      userAddress: address,
+    },
   });
 
   const handleRefresh = async () => {
@@ -306,12 +314,22 @@ export function SupplyAssetsList(): ReactElement {
                           formattedReserves={formattedReserves}
                           userReserves={userReserves}
                           aTokenBalancesMap={aTokenBalancesMap}
+                          mmPortfolio={
+                            userSummary
+                              ? {
+                                  healthFactor: userSummary.healthFactor,
+                                  totalBorrowsUSD: userSummary.totalBorrowsUSD,
+                                  totalCollateralUSD: userSummary.totalCollateralUSD,
+                                  currentLiquidationThreshold: userSummary.currentLiquidationThreshold,
+                                }
+                              : undefined
+                          }
                           onRefreshReserves={handleRefresh}
-                          onWithdrawClick={(token, maxWithdraw) => {
-                            setWithdrawData({ token, maxWithdraw });
+                          onWithdrawClick={(token, maxWithdraw, isHfLimited) => {
+                            setWithdrawData({ token, maxWithdraw, isHfLimited });
                           }}
-                          onSupplyClick={(token, maxSupply) => {
-                            setSupplyData({ token, maxSupply });
+                          onSupplyClick={token => {
+                            setSupplyData({ token });
                           }}
                         />
                       ))
@@ -327,7 +345,6 @@ export function SupplyAssetsList(): ReactElement {
         <SupplyModal
           open={true}
           token={supplyData.token}
-          maxSupply={supplyData.maxSupply}
           inlineSuccess={true}
           onOpenChange={open => {
             if (!open) setSupplyData(null);
@@ -339,6 +356,7 @@ export function SupplyAssetsList(): ReactElement {
           open={true}
           token={withdrawData.token}
           maxWithdraw={withdrawData.maxWithdraw}
+          isHfLimited={withdrawData.isHfLimited}
           inlineSuccess={true}
           onOpenChange={open => {
             if (!open) setWithdrawData(null);

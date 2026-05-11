@@ -1,64 +1,57 @@
-import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
-import type { SpokeProvider, CreateAssetDepositParams, SpokeTxHash, HubTxHash } from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
-
-export type UseDexDepositParams = {
-  params: CreateAssetDepositParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/dex/useDexDeposit.ts
+import type { AssetDepositAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
+ * Mutation variables for {@link useDexDeposit}. Generic over `K extends SpokeChainKey` (defaults
+ * to the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
+ */
+export type UseDexDepositVars<K extends SpokeChainKey = SpokeChainKey> = Omit<AssetDepositAction<K, false>, 'raw'>;
+
 /**
- * React hook that provides a mutation to perform a deposit into a DEX pool using the provided parameters and SpokeProvider.
+ * React hook for depositing an asset into a DEX pool.
  *
- * The hook returns a mutation object for executing the deposit (`mutateAsync`), tracking its state (`isPending`), and any resulting error (`error`).
- * On successful deposit, all queries matching ['dex', 'poolBalances'] are invalidated and refetched.
- *
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDexDepositParams>}
- *   React Query mutation result:
- *   - `mutateAsync({ params, spokeProvider })`: Triggers the deposit with {@link CreateDepositParams} and the target SpokeProvider.
- *   - `isPending`: True while the deposit transaction is pending.
- *   - `error`: Error if the mutation fails.
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
  *
  * @example
- * ```typescript
- * const { mutateAsync: deposit, isPending, error } = useDexDeposit();
- * await deposit({ params: { asset, amount, poolToken }, spokeProvider });
+ * ```tsx
+ * const walletProvider = useWalletProvider({ xChainId: chainKey });
+ * const { mutateAsync: deposit } = useDexDeposit();
+ * try {
+ *   const { spokeTxHash, hubTxHash } = await deposit({ params, walletProvider });
+ * } catch (e) {
+ *   // surfaced via mutation.error / onError
+ * }
  * ```
- *
- * @remarks
- * - Throws if called with missing `spokeProvider` or `params`.
- * - Upon success, automatically refetches up-to-date pool balances.
  */
-export function useDexDeposit(): UseMutationResult<[SpokeTxHash, HubTxHash], Error, UseDexDepositParams> {
+export function useDexDeposit<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseDexDepositVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseDexDepositVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ params, spokeProvider }: UseDexDepositParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider is required');
-      }
-
-      if (!params) {
-        throw new Error('Deposit params are required');
-      }
-
-      // Perform the deposit operation
-      const depositResult = await sodax.dex.assetService.deposit({
-        params,
-        spokeProvider,
+  return useSafeMutation<TxHashPair, Error, UseDexDepositVars<K>>({
+    mutationKey: ['dex', 'deposit'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.dex.assetService.deposit({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances', params.srcChainKey, params.srcAddress] });
+      queryClient.invalidateQueries({
+        queryKey: ['dex', 'allowance', params.srcChainKey, params.asset, params.amount.toString()],
       });
-
-      if (!depositResult.ok) {
-        throw new Error(`Deposit failed: ${depositResult.error?.code || 'Unknown error'}`);
-      }
-
-      return depositResult.value;
-    },
-    onSuccess: () => {
-      // Refetch pool balances after a successful deposit
-      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances'] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', params.srcChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

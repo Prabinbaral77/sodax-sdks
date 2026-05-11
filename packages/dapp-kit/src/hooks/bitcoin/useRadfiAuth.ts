@@ -1,5 +1,8 @@
-import type { BitcoinSpokeProvider } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
+// packages/dapp-kit/src/hooks/bitcoin/useRadfiAuth.ts
+import type { IBitcoinWalletProvider } from '@sodax/sdk';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
 
 export type RadfiSession = {
   accessToken: string;
@@ -8,17 +11,20 @@ export type RadfiSession = {
   publicKey: string;
 };
 
+export type UseRadfiAuthVars = {
+  walletProvider: IBitcoinWalletProvider;
+};
+
 type RadfiAuthResult = {
   accessToken: string;
   refreshToken: string;
   tradingAddress: string;
 };
 
-const SESSION_KEY = (address: string) => `radfi_session_${address}`;
+const SESSION_KEY = (address: string): string => `radfi_session_${address}`;
 
 export function saveRadfiSession(address: string, session: RadfiSession): void {
   try {
-    // Radfi tokens are only used for API rate-limiting / anti-spam, not for accessing user assets.
     localStorage.setItem(SESSION_KEY(address), JSON.stringify(session));
   } catch {}
 }
@@ -39,62 +45,60 @@ export function clearRadfiSession(address: string): void {
 }
 
 /**
- * Hook to authenticate with Radfi using BIP322 message signing.
- * Saves session (accessToken, refreshToken, tradingAddress, publicKey) to localStorage.
+ * React hook for authenticating with Radfi via BIP322-signed message. Pure mutation: pass
+ * `{ walletProvider }` to `mutate({...})`. The hook itself takes no arguments other than the
+ * structural `mutationOptions` slot.
  */
-export function useRadfiAuth(
-  spokeProvider: BitcoinSpokeProvider | undefined,
-): UseMutationResult<RadfiAuthResult, Error, void> {
-  return useMutation<RadfiAuthResult, Error, void>({
-    mutationFn: async () => {
-      if (!spokeProvider) {
-        throw new Error('Bitcoin spoke provider not found');
-      }
-
-      const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
+export function useRadfiAuth({
+  mutationOptions,
+}: MutationHookParams<RadfiAuthResult, UseRadfiAuthVars> = {}): SafeUseMutationResult<
+  RadfiAuthResult,
+  Error,
+  UseRadfiAuthVars
+> {
+  const { sodax } = useSodaxContext();
+  return useSafeMutation<RadfiAuthResult, Error, UseRadfiAuthVars>({
+    mutationKey: ['bitcoin', 'radfiAuth'],
+    ...mutationOptions,
+    mutationFn: async ({ walletProvider }) => {
+      const radfi = sodax.spokeService.bitcoinSpokeService.radfi;
+      const walletAddress = await walletProvider.getWalletAddress();
       const existingSession = loadRadfiSession(walletAddress);
       const cachedPublicKey = existingSession?.publicKey;
 
       try {
-        const { accessToken, refreshToken, tradingAddress, publicKey } = await spokeProvider.authenticateWithWallet(cachedPublicKey);
-
-        const session: RadfiSession = {
-          accessToken,
-          refreshToken,
-          tradingAddress,
-          publicKey,
-        };
-
-        saveRadfiSession(walletAddress, session);
-
+        const { accessToken, refreshToken, tradingAddress, publicKey } = await radfi.authenticateWithWallet(
+          walletProvider,
+          cachedPublicKey,
+        );
+        saveRadfiSession(walletAddress, { accessToken, refreshToken, tradingAddress, publicKey });
         return { accessToken, refreshToken, tradingAddress };
       } catch (err: unknown) {
-        // Error 4008: wallet already registered — authenticate is register+login combined.
-        // Try to refresh with existing session if available.
         const isAlreadyRegistered =
-          err instanceof Error &&
-          (err.message.includes('duplicatedPubKey') || err.message.includes('4008'));
+          err instanceof Error && (err.message.includes('duplicatedPubKey') || err.message.includes('4008'));
 
         if (isAlreadyRegistered && existingSession?.refreshToken) {
           try {
-            const refreshed = await spokeProvider.radfi.refreshAccessToken(existingSession.refreshToken);
-            const session: RadfiSession = {
+            const refreshed = await radfi.refreshAccessToken(existingSession.refreshToken);
+            radfi.setRadfiAccessToken(refreshed.accessToken, refreshed.refreshToken);
+            saveRadfiSession(walletAddress, {
               ...existingSession,
               accessToken: refreshed.accessToken,
               refreshToken: refreshed.refreshToken,
+            });
+            return {
+              accessToken: refreshed.accessToken,
+              refreshToken: refreshed.refreshToken,
+              tradingAddress: existingSession.tradingAddress,
             };
-            spokeProvider.setRadfiAccessToken(refreshed.accessToken, refreshed.refreshToken);
-            saveRadfiSession(walletAddress, session);
-            return { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken, tradingAddress: existingSession.tradingAddress };
           } catch {
-            // Refresh also failed — clear stale session and guide user
             clearRadfiSession(walletAddress);
           }
 
           throw new Error(
             'This wallet is already registered with Radfi from another session. ' +
-            'Please clear your browser storage for this site and try again, ' +
-            'or wait for the previous session to expire.',
+              'Please clear your browser storage for this site and try again, ' +
+              'or wait for the previous session to expire.',
           );
         }
 

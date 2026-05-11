@@ -1,60 +1,42 @@
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type {
-  CreateIntentParams,
-  SolverExecutionResponse,
-  Result,
-  IntentErrorCode,
-  Intent,
-  IntentError,
-  SpokeProvider,
-  IntentDeliveryInfo,
-} from '@sodax/sdk';
-import { useMutation, type UseMutationResult, useQueryClient } from '@tanstack/react-query';
-
-type CreateIntentResult = Result<[SolverExecutionResponse, Intent, IntentDeliveryInfo], IntentError<IntentErrorCode>>;
+// packages/dapp-kit/src/hooks/swap/useSwap.ts
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { SpokeChainKey, SwapActionParams, SwapResponse } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * Hook for creating and submitting an swap intent order for cross-chain swaps.
- * Uses React Query's useMutation for better state management and caching.
- *
- * @param {SpokeProvider} spokeProvider - The spoke provider to use for the swap
- * @returns {UseMutationResult} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: swap, isPending } = useSwap(spokeProvider);
- *
- * const handleSwap = async () => {
- *   const result = await swap({
- *     token_src: '0x...',
- *     token_src_blockchain_id: 'arbitrum',
- *     token_dst: '0x...',
- *     token_dst_blockchain_id: 'polygon',
- *     amount: '1000000000000000000',
- *     min_output_amount: '900000000000000000'
- *   });
- * };
- * ```
+ * Mutation variables for {@link useSwap}. Generic over `K extends SpokeChainKey` (defaults to the
+ * full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useSwap(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<CreateIntentResult, Error, CreateIntentParams> {
+export type UseSwapVars<K extends SpokeChainKey = SpokeChainKey> = Omit<SwapActionParams<K, false>, 'raw'>;
+
+/**
+ * React hook for executing an intent-based cross-chain swap.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `SwapResponse` on success.
+ */
+export function useSwap<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<SwapResponse, UseSwapVars<K>> = {}): SafeUseMutationResult<
+  SwapResponse,
+  Error,
+  UseSwapVars<K>
+> {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation<CreateIntentResult, Error, CreateIntentParams>({
-    mutationFn: async (params: CreateIntentParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-      return sodax.swaps.swap({
-        intentParams: params,
-        spokeProvider,
-      });
-    },
-    onSuccess: () => {
-      // Invalidate balance queries to refresh both source and destination token balances
-      queryClient.invalidateQueries({ queryKey: ['xBalances'] });
+  return useSafeMutation<SwapResponse, Error, UseSwapVars<K>>({
+    mutationKey: ['swap'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.swaps.swap({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', vars.params.srcChainKey] });
+      queryClient.invalidateQueries({ queryKey: ['shared', 'xBalances', vars.params.dstChainKey] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

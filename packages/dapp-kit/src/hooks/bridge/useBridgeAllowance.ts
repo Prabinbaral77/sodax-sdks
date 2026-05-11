@@ -1,49 +1,49 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { SpokeProvider, CreateBridgeIntentParams } from '@sodax/sdk';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { CreateBridgeIntentParams, GetWalletProviderType, SpokeChainKey } from '@sodax/sdk';
+import type { ReadHookParams } from '../shared/types.js';
 
-/**
- * Hook for checking token allowance for bridge operations.
- *
- * This hook verifies if the user has approved enough tokens for a specific bridge action.
- * It automatically queries and tracks the allowance status.
- *
- * @param {BridgeParams} params - The parameters for the bridge to check allowance for.
- * @param {SpokeProvider} spokeProvider - The spoke provider to use for allowance checks
- *
- * @returns {UseQueryResult<boolean, Error>} A React Query result containing:
- *   - data: Boolean indicating if allowance is sufficient
- *   - isLoading: Loading state indicator
- *   - error: Any error that occurred during the check
- *
- * @example
- * ```typescript
- * const { data: hasAllowed, isLoading } = useBridgeAllowance(params, spokeProvider);
- * ```
- */
-export function useBridgeAllowance(
-  params: CreateBridgeIntentParams | undefined,
-  spokeProvider: SpokeProvider | undefined,
-): UseQueryResult<boolean, Error> {
+export type UseBridgeAllowanceParams<K extends SpokeChainKey> = ReadHookParams<
+  boolean,
+  {
+    payload: CreateBridgeIntentParams<K> | undefined;
+    walletProvider: GetWalletProviderType<K> | undefined;
+  }
+>;
+
+export function useBridgeAllowance<K extends SpokeChainKey>({
+  params,
+  queryOptions,
+}: UseBridgeAllowanceParams<K> = {}): UseQueryResult<boolean, Error> {
   const { sodax } = useSodaxContext();
+  const payload = params?.payload;
+  const walletProvider = params?.walletProvider;
 
-  return useQuery({
-    queryKey: ['bridge-allowance', params],
+  return useQuery<boolean, Error>({
+    // Extract the (chain, owner, token, amount) tuple that actually scopes the allowance —
+    // raw-object keys break per Rule 4 (bigints) and churn on every render.
+    queryKey: [
+      'bridge',
+      'allowance',
+      payload?.srcChainKey,
+      payload?.srcAddress,
+      payload?.srcToken,
+      payload?.amount?.toString(),
+    ],
     queryFn: async () => {
-      if (!spokeProvider || !params) {
+      if (!payload || !walletProvider) {
         return false;
       }
-
-      const allowance = await sodax.bridge.isAllowanceValid({
-        params,
-        spokeProvider,
+      const result = await sodax.bridge.isAllowanceValid({
+        params: payload,
+        raw: false,
+        walletProvider,
       });
-
-      if (allowance.ok) {
-        return allowance.value;
-      }
-      return false;
+      return result.ok ? result.value : false;
     },
-    enabled: !!spokeProvider && !!params,
+    enabled: !!payload && !!walletProvider,
+    refetchInterval: 2000,
+    gcTime: 0,
+    ...queryOptions,
   });
 }

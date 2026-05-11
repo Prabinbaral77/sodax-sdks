@@ -12,11 +12,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ChainSelector } from '@/components/shared/ChainSelector';
 import { useEvmSwitchChain, useWalletProvider, useXAccount } from '@sodax/wallet-sdk-react';
-import { useQueryClient } from '@tanstack/react-query';
-import { parseUnits } from 'viem';
-import type { MoneyMarketBorrowParams } from '@sodax/sdk';
-import { useBorrow, useSpokeProvider, useReservesUsdFormat, useAToken, useUserReservesData } from '@sodax/dapp-kit';
-import type { ChainId, XToken } from '@sodax/types';
+import { parseUnits, formatUnits } from 'viem';
+import type { FormatUserSummaryResponse, MoneyMarketBorrowParams } from '@sodax/sdk';
+import { useBorrow, useReservesUsdFormat, useAToken, useUserReservesData, useSodaxContext } from '@sodax/dapp-kit';
+import type { SpokeChainKey, XToken } from '@sodax/sdk';
 import { useAppStore } from '@/zustand/useAppStore';
 import {
   getChainsWithThisToken,
@@ -25,15 +24,12 @@ import {
   getNativeTokenSymbol,
   formatDecimalForDisplay,
   getSafeMaxAmountForInput,
+  truncateToDecimals,
 } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-import { formatUnits } from 'viem';
 import { useReserveMetrics } from '@/hooks/useReserveMetrics';
-import { MIN_BORROW_USD, MAX_BORROW_SAFETY_MARGIN, ZERO_ADDRESS } from '../../constants';
-import type { FormatUserSummaryResponse } from '@sodax/sdk';
+import { MAX_BORROW_SAFETY_MARGIN, ZERO_ADDRESS, AMOUNT_DISPLAY_DECIMALS } from '../../constants';
 import { isUserReserveDataArray, isValidEvmAddress } from '../../typeGuards';
-import { isAddress } from 'viem';
-import { invalidateMmQueries } from '@/lib/invalidateMmQueries';
 import { extractTxHash } from '@/lib/extractTxHash';
 import { ErrorAlert } from '../../ErrorAlert';
 import { getChainName } from '@/constants';
@@ -44,17 +40,17 @@ interface BorrowModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   token: XToken;
-  //If true, shows success screen inline instead of closing and calling onSuccess.
-  inlineSuccess?: boolean; //Called on success. Only used when inlineSuccess is false.
+  // If true, shows success screen inline instead of closing and calling onSuccess.
+  inlineSuccess?: boolean; // Called on success. Only used when inlineSuccess is false.
   onSuccess?: (data: {
     amount: string;
     token: XToken;
-    sourceChainId: ChainId;
-    destinationChainId: ChainId;
+    sourceChainId: SpokeChainKey;
+    destinationChainId: SpokeChainKey;
     txHash?: `0x${string}`;
   }) => void;
   maxBorrow: string;
-  priceUSD: number; //User summary from the market chain (where collateral is).Used to recalculate max borrow based on user's borrowing capacity.
+  priceUSD: number; // User summary from the market chain (where collateral is). Used to recalculate max borrow based on user's borrowing capacity.
   userSummary?: FormatUserSummaryResponse;
 }
 
@@ -69,42 +65,25 @@ export function BorrowModal({
   userSummary,
 }: BorrowModalProps) {
   const [amount, setAmount] = useState('');
-  // 'form' | 'success' — controls which screen is shown within the dialog
   const [step, setStep] = useState<'form' | 'success'>('form');
   const [successData, setSuccessData] = useState<ActionSuccessData | null>(null);
   const { selectedChainId, openWalletModal, isWalletModalOpen } = useAppStore();
+  const { sodax } = useSodaxContext();
 
-  // Source = where collateral is & debt is created (market chain)
-  const [sourceChainId] = useState(selectedChainId);
+  const sourceChainId = selectedChainId;
+  const [destinationChainId, setDestinationChainId] = useState<SpokeChainKey>(token.chainKey);
 
-  // Destination = where borrowed funds are delivered (user can choose)
-  const [destinationChainId, setDestinationChainId] = useState<ChainId>(token.xChainId);
+  const destinationToken = getTokenOnChain(sodax, token.symbol, destinationChainId);
+  const supportedChains = getChainsWithThisToken(sodax, token);
 
-  const queryClient = useQueryClient();
-
-  // Get the token on the DESTINATION chain (for the token address in params)
-  // This must be declared before useReserveMetrics hook
-  const destinationToken = getTokenOnChain(token.symbol, destinationChainId);
-
-  // Get all chains that support this token
-  const supportedChains = getChainsWithThisToken(token);
-
-  // Get formatted reserves for calculating available liquidity on destination chain
   const { data: formattedReserves } = useReservesUsdFormat();
 
-  // Get user reserves for destination chain (for reserve metrics)
-  const destinationWalletProvider = useWalletProvider(destinationChainId);
-  const destinationSpokeProvider = useSpokeProvider(destinationChainId, destinationWalletProvider);
-  const { address: destinationAddressForReserves } = useXAccount(destinationChainId);
+  const { address: destinationAddressForReserves } = useXAccount({ xChainId: destinationChainId });
   const { data: destinationUserReserves } = useUserReservesData({
-    spokeProvider: destinationSpokeProvider,
-    address: destinationAddressForReserves,
+    params: { spokeChainKey: destinationChainId, userAddress: destinationAddressForReserves },
   });
 
-  // Get reserve metrics for destination token on destination chain
-  // Use destinationToken if available, otherwise fallback to original token
   const tokenForMetrics = destinationToken ?? token;
-  // Validate userReserves array before passing to useReserveMetrics
   const destinationUserReservesArray = destinationUserReserves?.[0] || [];
   if (!isUserReserveDataArray(destinationUserReservesArray)) {
     throw new Error('Invalid type of variable destinationUserReserves: expected UserReserveData[]');
@@ -116,186 +95,116 @@ export function BorrowModal({
     userReserves: destinationUserReservesArray,
   });
 
-  // Get aToken for calculating available liquidity
-  // Validate aTokenAddress is a valid EVM address before using
   const rawATokenAddress = destinationMetrics.formattedReserve?.aTokenAddress;
   const aTokenAddress =
     rawATokenAddress && rawATokenAddress !== ZERO_ADDRESS && isValidEvmAddress(rawATokenAddress)
       ? rawATokenAddress
       : undefined;
 
-  const { data: aToken } = useAToken({
-    aToken: aTokenAddress ?? ZERO_ADDRESS,
-    queryOptions: {
-      queryKey: ['aToken', aTokenAddress, destinationChainId],
-      enabled: !!aTokenAddress,
-    },
-  });
+  const { data: aToken } = useAToken({ params: { aToken: aTokenAddress } });
 
-  // Calculate max borrow dynamically based on destination chain
-  // If user has collateral, they can borrow any asset on any chain based on their borrowing capacity
-  // Destination chain liquidity is an optional constraint if available
-  const { maxBorrow, priceUSD } = useMemo(() => {
-    if (!userSummary) {
-      return { maxBorrow: initialMaxBorrow, priceUSD: initialPriceUSD };
-    }
+  const maxBorrow = useMemo(() => {
+    if (!userSummary) return initialMaxBorrow;
 
-    // Calculate user's borrowing capacity (always do this if user has collateral)
     let availableBorrowsUSD = Number(userSummary.availableBorrowsUSD);
 
-    // Fallback calculation if SDK returns 0 but user has collateral
-    // NOTE: Should use currentLoanToValue (LTV), not currentLiquidationThreshold
-    // LTV is the max you can borrow, liquidation threshold is when you get liquidated
+    // Fallback: SDK can return 0 due to rounding even when collateral exists; recompute from LTV.
     if (availableBorrowsUSD === 0 && Number(userSummary.totalCollateralUSD) > 0) {
       const totalCollateralUSD = Number(userSummary.totalCollateralUSD);
       const totalBorrowsUSD = Number(userSummary.totalBorrowsUSD);
       const currentLoanToValue = Number(userSummary.currentLoanToValue);
-
-      // Use LTV (not liquidation threshold) for max borrowable amount
-      const maxBorrowableUSD = totalCollateralUSD * currentLoanToValue;
-      availableBorrowsUSD = Math.max(0, maxBorrowableUSD - totalBorrowsUSD);
+      availableBorrowsUSD = Math.max(0, totalCollateralUSD * currentLoanToValue - totalBorrowsUSD);
     }
 
-    // If user has no borrowing capacity, return 0
-    if (availableBorrowsUSD <= 0) {
-      return { maxBorrow: '0', priceUSD: initialPriceUSD };
-    }
+    if (availableBorrowsUSD <= 0) return '0';
 
-    // Use price from destination chain if available, otherwise use initial price (from token's native chain)
     const destinationPriceUSD = destinationMetrics.formattedReserve
       ? Number(destinationMetrics.formattedReserve.priceInUSD)
       : 0;
     const finalPriceUSD = destinationPriceUSD > 0 ? destinationPriceUSD : initialPriceUSD;
 
-    // If no valid price available, can't calculate max borrow
-    if (finalPriceUSD <= 0) {
-      return { maxBorrow: initialMaxBorrow, priceUSD: initialPriceUSD };
-    }
+    if (finalPriceUSD <= 0) return initialMaxBorrow;
 
-    // Calculate max borrow based on user's borrowing capacity
     const userLimitTokens = availableBorrowsUSD / finalPriceUSD;
     let calculatedMaxBorrow = userLimitTokens;
 
-    // If destination chain has liquidity data, also consider that as a constraint
     if (destinationMetrics.formattedReserve && aToken) {
-      let availableLiquidity: string | undefined;
-      if (destinationMetrics.formattedReserve.borrowCap === '0') {
-        availableLiquidity = formatUnits(
-          BigInt(destinationMetrics.formattedReserve.availableLiquidity),
-          aToken.decimals,
-        );
-      } else {
-        availableLiquidity = Math.min(
-          Number.parseFloat(
-            formatUnits(BigInt(destinationMetrics.formattedReserve.availableLiquidity), aToken.decimals),
-          ),
-          Number.parseInt(destinationMetrics.formattedReserve.borrowCap) -
-            Number.parseFloat(destinationMetrics.formattedReserve.totalScaledVariableDebt),
-        ).toFixed(6);
-      }
+      const availableLiquidityNum = Number.parseFloat(
+        formatUnits(BigInt(destinationMetrics.formattedReserve.availableLiquidity), aToken.decimals),
+      );
+      const borrowCap = destinationMetrics.formattedReserve.borrowCap;
+      const poolLimitTokens =
+        borrowCap === '0'
+          ? availableLiquidityNum
+          : Math.min(
+              availableLiquidityNum,
+              Number.parseFloat(borrowCap) - Number.parseFloat(destinationMetrics.formattedReserve.totalVariableDebt),
+            );
 
-      if (availableLiquidity && Number(availableLiquidity) > 0) {
-        const poolLimitTokens = Number(availableLiquidity);
-        // Take the minimum of user capacity and pool liquidity
+      if (poolLimitTokens > 0) {
         calculatedMaxBorrow = Math.min(userLimitTokens, poolLimitTokens);
       }
     }
 
-    // Apply safety margin and format
-    const afterSafetyMargin = calculatedMaxBorrow * MAX_BORROW_SAFETY_MARGIN;
-    const finalMaxBorrow = afterSafetyMargin.toFixed(6);
-
-    return {
-      maxBorrow: finalMaxBorrow !== '0' ? finalMaxBorrow : '0',
-      priceUSD: finalPriceUSD,
-    };
+    return truncateToDecimals(calculatedMaxBorrow * MAX_BORROW_SAFETY_MARGIN, AMOUNT_DISPLAY_DECIMALS);
   }, [userSummary, destinationMetrics.formattedReserve, aToken, initialMaxBorrow, initialPriceUSD]);
 
-  // Calculate minimum borrow amount ($1 USD equivalent)
-  // Imported from centralized constants for easy maintenance
-  const minBorrowAmount = useMemo(() => {
-    if (!destinationToken || priceUSD <= 0) return '0';
-    const minTokens = MIN_BORROW_USD / priceUSD;
-    return minTokens.toFixed(6);
-  }, [destinationToken, priceUSD]);
-
-  const sourceWalletProvider = useWalletProvider(sourceChainId);
-  const sourceSpokeProvider = useSpokeProvider(sourceChainId, sourceWalletProvider);
-
-  const { address: sourceAddress } = useXAccount(sourceChainId);
-
-  // Get the destination chain address for cross-chain borrows
-  const { address: destinationAddress } = useXAccount(destinationChainId);
+  const sourceWalletProvider = useWalletProvider({ xChainId: sourceChainId });
+  const { address: sourceAddress } = useXAccount({ xChainId: sourceChainId });
+  const { address: destinationAddress } = useXAccount({ xChainId: destinationChainId });
 
   const { mutateAsync: borrow, isPending, error, reset: resetBorrowError } = useBorrow();
 
-  /**
-   * token.address = destination chain token; spokeProvider = source (debt) chain;
-   * toChainId = where funds are delivered (cross-chain only).
-   */
   const params: MoneyMarketBorrowParams | undefined = useMemo(() => {
-    if (!amount || !destinationToken) {
+    if (!amount || !destinationToken || !sourceAddress) {
       return undefined;
     }
 
     const normalizedAmount = amount.replace(',', '.');
-
     const amountNum = Number.parseFloat(normalizedAmount);
 
-    // CRITICAL: Reject zero or negative amounts
     if (amountNum <= 0 || Number.isNaN(amountNum)) {
       return undefined;
     }
 
-    // Validate maximum borrow amount (prevent borrowing more than available)
-    // Check if maxBorrow is effectively zero (e.g., '0.000000' parses to 0)
     const maxBorrowNum = maxBorrow ? Number.parseFloat(maxBorrow) : 0;
     const isMaxBorrowEffectivelyZero = maxBorrowNum <= 0 || Number.isNaN(maxBorrowNum);
 
     if (isMaxBorrowEffectivelyZero) {
-      return undefined; // Cannot borrow when max borrow is zero
+      return undefined;
     }
 
     if (amountNum > maxBorrowNum) {
-      return undefined; // Amount exceeds maximum borrowable
+      return undefined;
     }
 
     const isSameChain = sourceChainId === destinationChainId;
 
-    // Only include toChainId and toAddress if cross-chain and destinationAddress is available
     const crossChainParams =
-      isSameChain || !destinationAddress ? {} : { toChainId: destinationChainId, toAddress: destinationAddress };
+      isSameChain || !destinationAddress ? {} : { dstChainKey: destinationChainId, dstAddress: destinationAddress };
 
     const parsedAmount = parseUnits(normalizedAmount, destinationToken.decimals);
 
     return {
-      token: destinationToken.address, // Token on destination chain
+      srcChainKey: sourceChainId,
+      srcAddress: sourceAddress,
+      token: destinationToken.address,
       amount: parsedAmount,
       action: 'borrow',
       ...crossChainParams,
     };
-  }, [amount, destinationToken, sourceChainId, destinationChainId, destinationAddress, maxBorrow]);
+  }, [amount, destinationToken, sourceChainId, destinationChainId, destinationAddress, sourceAddress, maxBorrow]);
 
-  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain(sourceChainId);
+  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain({ xChainId: sourceChainId });
 
-  // Borrow actions never require ERC-20 token approval (SDK's isAllowanceValid returns true for borrow)
   const isBusy = isPending;
 
   const handleBorrow = async (): Promise<void> => {
-    if (!sourceSpokeProvider || !params) return;
+    if (!sourceWalletProvider || !params) return;
 
     try {
       const normalizedAmount = amount.replace(',', '.');
-      const result = await borrow({
-        params,
-        spokeProvider: sourceSpokeProvider, // Debt created on source chain
-      });
-
-      invalidateMmQueries(queryClient, {
-        mmChainIds: [sourceChainId],
-        address: sourceAddress,
-        balanceChainIds: [sourceChainId, destinationChainId],
-      });
+      const result = await borrow({ params, walletProvider: sourceWalletProvider });
 
       const nextSuccessData: ActionSuccessData = {
         amount: normalizedAmount,
@@ -327,7 +236,6 @@ export function BorrowModal({
     }
   };
 
-  // Check if max borrow is effectively zero (even if formatted as '0.000000')
   const isMaxBorrowEffectivelyZero = useMemo(() => {
     if (!maxBorrow || maxBorrow === '0') return true;
     const maxBorrowNum = Number.parseFloat(maxBorrow);
@@ -335,7 +243,6 @@ export function BorrowModal({
   }, [maxBorrow]);
 
   const handleOpenChangeInternal = (nextOpen: boolean) => {
-    // Keep modal open while wallet modal is active for smoother UX transition
     if (!nextOpen && isWalletModalOpen) {
       return;
     }
@@ -344,7 +251,7 @@ export function BorrowModal({
       setAmount('');
       setStep('form');
       setSuccessData(null);
-      setDestinationChainId(token.xChainId); // Reset to default
+      setDestinationChainId(token.chainKey);
       resetBorrowError?.();
     }
   };
@@ -352,7 +259,6 @@ export function BorrowModal({
   const isSameChain = sourceChainId === destinationChainId;
   const isCrossChainMissingDestinationAddress = !isSameChain && !destinationAddress;
 
-  // Show success screen instead of form when transaction completes and inlineSuccess is enabled
   if (inlineSuccess && step === 'success' && successData) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChangeInternal} modal={!isWalletModalOpen}>
@@ -374,7 +280,6 @@ export function BorrowModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Source Chain (locked - where collateral is) */}
           <div className="space-y-2">
             <Label>Borrow from (collateral chain)</Label>
             <div className="p-2 bg-muted rounded-md">
@@ -385,7 +290,6 @@ export function BorrowModal({
             </div>
           </div>
 
-          {/* Destination Chain (user selectable) */}
           <div className="space-y-2">
             <Label>Deliver funds to</Label>
             <ChainSelector
@@ -396,11 +300,12 @@ export function BorrowModal({
             <p className="text-xs text-muted-foreground">
               {isSameChain
                 ? 'Same-chain borrow'
-                : `Cross-chain: Collateral on ${getChainName(sourceChainId) || sourceChainId}, funds on ${getChainName(destinationChainId) || destinationChainId}`}
+                : `Cross-chain: Collateral on ${getChainName(sourceChainId) || sourceChainId}, funds on ${
+                    getChainName(destinationChainId) || destinationChainId
+                  }`}
             </p>
           </div>
 
-          {/* Amount Input */}
           <div className="space-y-2">
             <Label htmlFor="amount">Amount</Label>
             <div className="flex items-center gap-2">
@@ -429,11 +334,10 @@ export function BorrowModal({
                   Max borrow: {formatDecimalForDisplay(maxBorrow, 4)} {token.symbol}
                 </p>
               )}
-              {/* Show validation messages only when user enters an amount */}
               {amount &&
                 (() => {
-                  const amountNum = Number.parseFloat(amount.replace(',', '.'));
-                  if (Number.isNaN(amountNum) || amountNum <= 0) return null;
+                  const inputAmountNum = Number.parseFloat(amount.replace(',', '.'));
+                  if (Number.isNaN(inputAmountNum) || inputAmountNum <= 0) return null;
 
                   if (isMaxBorrowEffectivelyZero && !isBusy) {
                     return (
@@ -445,7 +349,7 @@ export function BorrowModal({
                   }
 
                   const maxBorrowNum = Number.parseFloat(maxBorrow);
-                  if (!Number.isNaN(maxBorrowNum) && amountNum > maxBorrowNum && !isBusy) {
+                  if (!Number.isNaN(maxBorrowNum) && inputAmountNum > maxBorrowNum && !isBusy) {
                     return (
                       <ErrorAlert
                         text={`Amount exceeds maximum borrowable: ${formatDecimalForDisplay(maxBorrow, 4)} ${token.symbol}`}
@@ -462,16 +366,17 @@ export function BorrowModal({
 
         {error && <ErrorAlert text={getMmErrorText(error)} />}
 
-        {/* Gas fee warning - only show when user can actually borrow */}
         {!isWrongChain &&
           !isCrossChainMissingDestinationAddress &&
           amount &&
           !isMaxBorrowEffectivelyZero &&
           (() => {
-            const amountNum = Number.parseFloat(amount.replace(',', '.'));
+            const inputAmountNum = Number.parseFloat(amount.replace(',', '.'));
             const maxBorrowNum = Number.parseFloat(maxBorrow);
             return (
-              !Number.isNaN(amountNum) && amountNum > 0 && (Number.isNaN(maxBorrowNum) || amountNum <= maxBorrowNum)
+              !Number.isNaN(inputAmountNum) &&
+              inputAmountNum > 0 &&
+              (Number.isNaN(maxBorrowNum) || inputAmountNum <= maxBorrowNum)
             );
           })() && (
             <p className="text-xs text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-200 dark:border-amber-800">
@@ -500,11 +405,7 @@ export function BorrowModal({
               type="button"
               variant="default"
               onClick={handleBorrow}
-              disabled={
-                !params || // params is undefined if: amount is empty, token missing, or amount below minimum
-                !amount || // Additional validation: ensure amount is not empty
-                isBusy // Prevent action during pending transaction
-              }
+              disabled={!params || !amount || isBusy}
             >
               Borrow {token.symbol}
             </Button>

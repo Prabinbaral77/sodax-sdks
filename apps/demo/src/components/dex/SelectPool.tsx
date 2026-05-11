@@ -5,10 +5,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, AlertCircle } from 'lucide-react';
 import type { PoolKey } from '@sodax/sdk';
-import type { ChainId } from '@sodax/types';
+import type { SpokeChainKey } from '@sodax/sdk';
 
 interface SelectPoolProps {
-  selectedChainId: ChainId | null;
+  selectedChainId: SpokeChainKey | null;
   pools: PoolKey[];
   selectedPoolIndex: number;
   onPoolSelect: (index: number) => void;

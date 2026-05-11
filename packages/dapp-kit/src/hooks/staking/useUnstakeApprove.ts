@@ -1,52 +1,49 @@
-// packages/dapp-kit/src/hooks/staking/useStakeApprove.ts
-import { useSodaxContext } from '../shared/useSodaxContext';
-import type { TxReturnType, UnstakeParams } from '@sodax/sdk';
-import { useMutation, type UseMutationResult } from '@tanstack/react-query';
-import type { SpokeProvider } from '@sodax/sdk';
+// packages/dapp-kit/src/hooks/staking/useUnstakeApprove.ts
+import type { GetWalletProviderType, SpokeChainKey, TxReturnType, UnstakeParams } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * Hook for approving xSODA token spending for unstaking operations.
- * Uses React Query's useMutation for better state management and caching.
- *
- * @param {SpokeProvider | undefined} spokeProvider - The spoke provider to use for the approval
- * @returns {UseMutationResult<TxReturnType<SpokeProvider, false>, Error, Omit<UnstakeParams, 'action'>>} Mutation result object containing mutation function and state
- *
- * @example
- * ```typescript
- * const { mutateAsync: approve, isPending } = useUnstakeApprove(spokeProvider);
- *
- * const handleApprove = async () => {
- *   const result = await approve({
- *     amount: 1000000000000000000n, // 1 xSODA
- *     account: '0x...'
- *   });
- *
- *   console.log('Approval successful:', result);
- * };
- * ```
+ * Mutation variables for {@link useUnstakeApprove}. The `action` literal is injected by the hook.
  */
-export function useUnstakeApprove(
-  spokeProvider: SpokeProvider | undefined,
-): UseMutationResult<TxReturnType<SpokeProvider, false>, Error, Omit<UnstakeParams, 'action'>> {
+export type UseUnstakeApproveVars<K extends SpokeChainKey = SpokeChainKey> = {
+  params: Omit<UnstakeParams<K>, 'action'>;
+  walletProvider: GetWalletProviderType<K>;
+};
+
+/**
+ * React hook for approving xSODA spending on the unstake action.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped tx return value on success.
+ */
+export function useUnstakeApprove<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxReturnType<K, false>, UseUnstakeApproveVars<K>> = {}): SafeUseMutationResult<
+  TxReturnType<K, false>,
+  Error,
+  UseUnstakeApproveVars<K>
+> {
   const { sodax } = useSodaxContext();
+  const queryClient = useQueryClient();
 
-  return useMutation<TxReturnType<SpokeProvider, false>, Error, Omit<UnstakeParams, 'action'>>({
-    mutationFn: async (params: Omit<UnstakeParams, 'action'>) => {
-      console.log('useUnstakeApprove called with params:', params);
-      if (!spokeProvider) {
-        throw new Error('Spoke provider not found');
-      }
-
-      const result = await sodax.staking.approve({
-        params: { ...params, action: 'unstake' },
-        spokeProvider,
-      });
-
-      if (!result.ok) {
-        throw new Error(`Unstake approval failed: ${result.error.code}`);
-      }
-
-      return result.value;
+  return useSafeMutation<TxReturnType<K, false>, Error, UseUnstakeApproveVars<K>>({
+    mutationKey: ['staking', 'approve', 'unstake'],
+    ...mutationOptions,
+    mutationFn: async ({ params, walletProvider }) =>
+      unwrapResult(
+        await sodax.staking.approve({
+          params: { ...params, action: 'unstake' },
+          raw: false,
+          walletProvider,
+        }),
+      ),
+    onSuccess: async (data, vars, ctx) => {
+      queryClient.invalidateQueries({ queryKey: ['staking', 'allowance', vars.params.srcChainKey, 'unstake'] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

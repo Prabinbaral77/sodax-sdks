@@ -10,10 +10,10 @@ import { useGetUserHubWalletAddress } from '@sodax/dapp-kit';
 import { Info, Wallet } from 'lucide-react';
 import { BorrowAssetsList } from '@/components/mm/lists/borrow/BorrowAssetsList';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { baseChainInfo, type ChainId } from '@sodax/types';
+import { baseChainInfo, type SpokeChainKey } from '@sodax/sdk';
 
 const validChainIds = new Set<string>(Object.keys(baseChainInfo));
-const isValidChainId = (id: string | undefined): id is ChainId => !!id && validChainIds.has(id);
+const isValidChainId = (id: string | undefined): id is SpokeChainKey => !!id && validChainIds.has(id);
 
 export default function MoneyMarketPage() {
   const { openWalletModal, selectedChainId, selectChainId } = useAppStore();
@@ -34,13 +34,15 @@ export default function MoneyMarketPage() {
     }
   }, [chainIdParam, selectedChainId, selectChainId]);
 
-  const handleSelectChain = (newChainId: ChainId) => {
+  const handleSelectChain = (newChainId: SpokeChainKey) => {
     navigate(`/money-market/${newChainId}`);
   };
 
-  const xAccount = useXAccount(chainId);
+  const xAccount = useXAccount({ xChainId: chainId });
 
-  const { data: walletAddressOnHub } = useGetUserHubWalletAddress(chainId, xAccount?.address);
+  const { data: walletAddressOnHub } = useGetUserHubWalletAddress({
+    params: { spokeChainId: chainId, spokeAddress: xAccount?.address },
+  });
 
   return (
     <main className="min-h-screen bg-linear-to-br from-almost-white via-cream-white to-vibrant-white">

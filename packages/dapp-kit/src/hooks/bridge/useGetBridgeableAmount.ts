@@ -1,51 +1,37 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { useSodaxContext } from '../shared/useSodaxContext';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
 import type { BridgeLimit, XToken } from '@sodax/sdk';
+import type { ReadHookParams } from '../shared/types.js';
 
-/**
- * Hook for getting the amount available to be bridged.
- *
- * This hook is used to check if a target chain has enough balance to bridge when bridging.
- * It automatically queries and tracks the available amount to be bridged.
- *
- * @param {SpokeChainId | undefined} chainId - The chain ID to get the balance for
- * @param {string | undefined} token - The token address to get the balance for
- *
- * @returns {UseQueryResult<BridgeLimit, Error>} A React Query result containing:
- *   - data: Data about available amount to be bridged
- *   - error: Any error that occurred during the check
- *
- * @example
- * ```typescript
- * const { data: balance, isLoading } = useSpokeAssetManagerTokenBalance(chainId, tokenAddress);
- *
- * if (balance) {
- *   console.log('Asset manager token balance:', balance.toString());
- * }
- * ```
- */
-export function useGetBridgeableAmount(
-  from: XToken | undefined,
-  to: XToken | undefined,
-): UseQueryResult<BridgeLimit, Error> {
+export type UseGetBridgeableAmountParams = ReadHookParams<
+  BridgeLimit,
+  {
+    from: XToken | undefined;
+    to: XToken | undefined;
+  }
+>;
+
+export function useGetBridgeableAmount({
+  params,
+  queryOptions,
+}: UseGetBridgeableAmountParams = {}): UseQueryResult<BridgeLimit, Error> {
   const { sodax } = useSodaxContext();
+  const from = params?.from;
+  const to = params?.to;
 
-  return useQuery({
-    queryKey: ['spoke-asset-manager-token-balance', from, to],
+  return useQuery<BridgeLimit, Error>({
+    queryKey: ['bridge', 'bridgeableAmount', from, to],
     queryFn: async () => {
       if (!from || !to) {
-        return { amount: 0n, decimals: 0, type: 'DEPOSIT_LIMIT' } as const;
+        throw new Error('from and to tokens are required');
       }
-
       const result = await sodax.bridge.getBridgeableAmount(from, to);
-
-      if (result.ok) {
-        return result.value;
+      if (!result.ok) {
+        throw result.error;
       }
-
-      console.error('Error getting bridgeable amount:', result.error);
-      return { amount: 0n, decimals: 0, type: 'DEPOSIT_LIMIT' } as const;
+      return result.value;
     },
     enabled: !!from && !!to,
+    ...queryOptions,
   });
 }

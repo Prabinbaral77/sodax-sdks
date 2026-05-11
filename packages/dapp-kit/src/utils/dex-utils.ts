@@ -4,14 +4,36 @@ import type {
   UseCreateSupplyLiquidityParamsProps,
   UseCreateSupplyLiquidityParamsResult,
   UseCreateWithdrawParamsProps,
-} from '@/hooks/dex';
+} from '@/hooks/dex/index.js';
 import {
   ClService,
   type CreateAssetWithdrawParams,
-  type ConcentratedLiquidityDecreaseLiquidityParams,
+  type ClDecreaseLiquidityParams,
   type CreateAssetDepositParams,
 } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
 import { parseUnits } from 'viem';
+
+/**
+ * Subset of {@link CreateAssetDepositParams} produced by {@link createDepositParamsProps}.
+ * Callers add `srcChainKey` + `srcAddress` at the mutation call site.
+ */
+export type DepositParamsCore = Omit<CreateAssetDepositParams<SpokeChainKey>, 'srcChainKey' | 'srcAddress'>;
+
+/**
+ * Subset of {@link CreateAssetWithdrawParams} produced by {@link createWithdrawParamsProps}.
+ * Callers add `srcChainKey` + `srcAddress` at the mutation call site.
+ */
+export type WithdrawParamsCore = Omit<CreateAssetWithdrawParams<SpokeChainKey>, 'srcChainKey' | 'srcAddress'>;
+
+/**
+ * Subset of {@link ClDecreaseLiquidityParams} produced by {@link createDecreaseLiquidityParamsProps}.
+ * Callers add `srcChainKey` + `srcAddress` at the mutation call site.
+ */
+export type DecreaseLiquidityParamsCore = Omit<
+  ClDecreaseLiquidityParams<SpokeChainKey>,
+  'srcChainKey' | 'srcAddress'
+>;
 
 export function createDecreaseLiquidityParamsProps({
   poolKey,
@@ -19,7 +41,7 @@ export function createDecreaseLiquidityParamsProps({
   percentage,
   positionInfo,
   slippageTolerance,
-}: UseCreateDecreaseLiquidityParamsProps): ConcentratedLiquidityDecreaseLiquidityParams {
+}: UseCreateDecreaseLiquidityParamsProps): DecreaseLiquidityParamsCore {
   const percentageNum = Number.parseFloat(String(percentage));
   const slippage = Number.parseFloat(String(slippageTolerance));
 
@@ -66,7 +88,7 @@ export function createDepositParamsProps({
   amount,
   poolData,
   poolSpokeAssets,
-}: UseCreateDepositParamsProps): CreateAssetDepositParams {
+}: UseCreateDepositParamsProps): DepositParamsCore {
   const amountNum = Number.parseFloat(String(amount));
 
   if (!amount || amountNum <= 0) {
@@ -124,20 +146,26 @@ export function createSupplyLiquidityParamsProps({
   const tickLower = ClService.priceToTick(minPriceNum, token0, token1, tickSpacing);
   const tickUpper = ClService.priceToTick(maxPriceNum, token0, token1, tickSpacing);
 
-  // Apply slippage BEFORE calculating liquidity
-  const slippageMultiplier = BigInt(Math.floor((100 - slippage) * 100)); // e.g., 0.5% => 9950
-
-  const amount0ForLiquidity = (amount0BigInt * slippageMultiplier) / 10000n;
-  const amount1ForLiquidity = (amount1BigInt * slippageMultiplier) / 10000n;
-
-  // Calculate liquidity based on reduced amounts (accounting for slippage)
+  // Calculate liquidity from full amounts (the desired deposit)
   const liquidity = ClService.calculateLiquidityFromAmounts(
-    amount0ForLiquidity,
-    amount1ForLiquidity,
+    amount0BigInt,
+    amount1BigInt,
     tickLower,
     tickUpper,
     BigInt(poolData.currentTick),
   );
+
+  // Apply slippage to get max amounts — the ceiling the contract is allowed to pull.
+  // If price moves unfavorably, the contract may need slightly more tokens than expected.
+  const { amount0Max, amount1Max } = ClService.calculateMaxAmountsForSlippage(
+    liquidity,
+    tickLower,
+    tickUpper,
+    BigInt(poolData.currentTick),
+    poolData.sqrtPriceX96,
+    slippage,
+  );
+
   const tokenId = positionId ? BigInt(positionId) : undefined;
 
   return {
@@ -145,8 +173,8 @@ export function createSupplyLiquidityParamsProps({
     tickLower,
     tickUpper,
     liquidity,
-    amount0Max: amount0BigInt,
-    amount1Max: amount1BigInt,
+    amount0Max,
+    amount1Max,
     sqrtPriceX96: poolData.sqrtPriceX96,
     positionId,
     isValidPosition,
@@ -160,7 +188,7 @@ export function createWithdrawParamsProps({
   poolData,
   poolSpokeAssets,
   dst,
-}: UseCreateWithdrawParamsProps): CreateAssetWithdrawParams {
+}: UseCreateWithdrawParamsProps): WithdrawParamsCore {
   const amountNum = Number.parseFloat(String(amount));
   if (!amount || amountNum <= 0) {
     throw new Error('Please enter a valid amount');

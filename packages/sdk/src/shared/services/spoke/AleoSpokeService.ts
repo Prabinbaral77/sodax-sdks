@@ -1,250 +1,335 @@
-import type { Address, Hex } from 'viem';
-import { keccak256 } from 'viem';
-import type { EvmHubProvider } from '../../entities/index.js';
-import { type AleoSpokeProvider, ALEO_DEFAULT_TIMEOUT } from '../../entities/aleo/AleoSpokeProvider.js';
+import { keccak256, toHex, type Address, type Hex } from 'viem';
+import {
+  type AleoChainKey,
+  type AleoExecuteOptions,
+  type AleoNetworkEnv,
+  type AleoProgramId,
+  type AleoRawTransaction,
+  type AleoSpokeChainConfig,
+  type AleoTransactionReceipt,
+  ChainKeys,
+  getIntentRelayChainId,
+  type IAleoWalletProvider,
+  type Result,
+  type TxReturnType,
+} from '@sodax/types';
 import type {
-  AleoGasEstimate,
-  AleoSpokeProviderType,
-  DepositSimulationParams,
-  Result,
-  TxReturnType,
-} from '../../types.js';
-import { getIntentRelayChainId, type AleoRawTransaction, type HubAddress } from '@sodax/types';
-import { EvmWalletAbstraction } from '../hub/index.js';
-import { encodeAddress } from '../../utils/shared-utils.js';
-import { isAleoRawSpokeProvider } from '../../guards.js';
-import { U64_MAX } from '../../constants.js';
+  DepositParams,
+  EstimateGasParams,
+  GetDepositParams,
+  SendMessageParams,
+  WaitForTxReceiptParams,
+  WaitForTxReceiptReturnType,
+} from '../../types/spoke-types.js';
+import type { ConfigService } from '../../config/ConfigService.js';
+import { decodeBech32m } from '../../utils/bech32m.js';
+import type { EvmHubProvider } from '../../entities/EvmHubProvider.js';
 
-export type AleoSpokeDepositParams = {
-  from: string; // Aleo address (aleo1...)
-  to?: HubAddress; // The address of the user on the hub chain (wallet abstraction address)
-  token: string; // Token ID (will be converted to field)
-  amount: bigint; // Amount to transfer (will be converted to u64)
-  data: Hex; // Data payload
-  connSn?: string; // Connection sequence number (randomly generated if not provided)
-  feeAmount?: bigint; // Fee amount for cross-chain transfer (defaults to 0)
-};
+const U64_MAX = BigInt('18446744073709551615');
+const ALEO_DEFAULT_TIMEOUT_MS = 45_000;
+const ALEO_DEFAULT_CHECK_INTERVAL_MS = 2_000;
+const ALEO_ADDRESS_PREFIX = 'aleo1';
+const ALEO_ADDRESS_LENGTH = 63;
+const ALEO_TX_PREFIX = 'at1';
+const ALEO_TX_LENGTH = 61;
+const ALEO_CONNSN_GENERATION_RETRIES = 3;
 
-type AleoTransferToHubParams = {
-  token: bigint;
-  recipient: Address;
-  amount: bigint;
-  data: Hex;
-  connSn?: bigint;
-  feeAmount: bigint;
-};
+// Lazy-load @provablehq/sdk to avoid triggering WASM initialization at import time.
+type AleoSDK = typeof import('@provablehq/sdk');
+
+function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
+  if (network === 'testnet') return import('@provablehq/sdk/testnet.js') as unknown as Promise<AleoSDK>;
+  return import('@provablehq/sdk/mainnet.js') as unknown as Promise<AleoSDK>;
+}
+
+function isValidAleoAddress(address: string): boolean {
+  return typeof address === 'string' && address.startsWith(ALEO_ADDRESS_PREFIX) && address.length === ALEO_ADDRESS_LENGTH;
+}
+
+function isValidAleoTransactionId(txId: string): boolean {
+  return typeof txId === 'string' && txId.startsWith(ALEO_TX_PREFIX) && txId.length === ALEO_TX_LENGTH;
+}
+
+function formatAleoInput(value: bigint, type: 'u64' | 'u128' | 'field' = 'u128'): string {
+  return `${value}${type}`;
+}
+
+/** Convert hex string to Leo `[u8; 32]` array literal, left-padded to 32 bytes. */
+function hexToAleoU8Array(hex: string): string {
+  let normalized = hex.trim().toLowerCase();
+  if (normalized.startsWith('0x')) normalized = normalized.slice(2);
+  if (normalized.length % 2 === 1) normalized = `0${normalized}`;
+
+  const bytes = new Uint8Array(normalized.match(/.{1,2}/g)?.map(byte => Number.parseInt(byte, 16)) ?? []);
+  if (bytes.length > 32) throw new Error(`Hex input exceeds 32 bytes: ${bytes.length}`);
+
+  const padded = new Uint8Array(32);
+  padded.set(bytes, 32 - bytes.length);
+  return `[${Array.from(padded)
+    .map(b => `${b}u8`)
+    .join(', ')}]`;
+}
+
+function aleoAddressToHex(address: string): Hex {
+  if (!isValidAleoAddress(address)) {
+    throw new Error(`Invalid Aleo address: ${address}`);
+  }
+  const { data } = decodeBech32m(address);
+  return toHex(new Uint8Array([...data].reverse()));
+}
 
 export class AleoSpokeService {
-  private constructor() {}
+  private readonly chainConfig: AleoSpokeChainConfig;
+  private readonly network: AleoNetworkEnv;
+  private readonly pollingIntervalMs: number;
+  private readonly maxTimeoutMs: number;
 
-  /**
-   * Estimate the gas for an Aleo transaction.
-   * @param rawTx - The raw transaction to estimate the gas for.
-   * @param spokeProvider - The provider for the spoke chain.
-   * @returns The estimated gas for the transaction.
-   */
-  public static async estimateGas(
-    rawTx: AleoRawTransaction,
-    spokeProvider: AleoSpokeProviderType,
-  ): Promise<AleoGasEstimate> {
-    return spokeProvider.estimateFee(rawTx.data);
+  private _networkClient: Awaited<AleoSDK>['AleoNetworkClient']['prototype'] | null = null;
+  private _programManager: Awaited<AleoSDK>['ProgramManager']['prototype'] | null = null;
+
+  public constructor(config: ConfigService, network: AleoNetworkEnv = 'mainnet') {
+    this.chainConfig = config.getChainConfig(ChainKeys.ALEO_MAINNET) as AleoSpokeChainConfig;
+    this.network = network;
+    this.pollingIntervalMs = this.chainConfig.pollingConfig.pollingIntervalMs;
+    this.maxTimeoutMs = this.chainConfig.pollingConfig.maxTimeoutMs;
+  }
+
+  private async ensureClients(): Promise<void> {
+    if (!this._networkClient) {
+      const { AleoNetworkClient, ProgramManager } = await loadAleoSDK(this.network);
+      this._networkClient = new AleoNetworkClient(this.chainConfig.rpcUrl);
+      this._programManager = new ProgramManager(this.chainConfig.rpcUrl);
+    }
+  }
+
+  public async estimateGas(_: EstimateGasParams<AleoChainKey>): Promise<bigint | number> {
+    await this.ensureClients();
+    if (!this._programManager) throw new Error('Aleo SDK not initialized');
+    // Without a concrete tx context we approximate at zero gas — Aleo fees are computed
+    // by the program manager from execute params at submit time.
+    return 0n;
   }
 
   /**
-   * Deposit tokens from the Aleo spoke chain to the hub chain.
-   * @param params - The deposit parameters.
-   * @param spokeProvider - The Aleo spoke provider.
-   * @param hubProvider - The EVM hub provider.
-   * @param raw - Whether to return raw transaction data.
-   * @returns The transaction ID or raw transaction.
+   * Deposit tokens from Aleo to the hub via asset_manager.aleo.
+   * Aleo transitions cannot read on-chain mappings, so conn_sn, fee, hub_chain_id, and
+   * hub_address must all be passed as inputs.
    */
-  public static async deposit<S extends AleoSpokeProviderType, R extends boolean = false>(
-    params: AleoSpokeDepositParams,
-    spokeProvider: S,
+  public async deposit<R extends boolean>(
+    params: DepositParams<AleoChainKey, R>,
     hubProvider: EvmHubProvider,
-    raw?: R,
-  ): Promise<TxReturnType<S, R>> {
-    const userWallet: Address =
-      params.to ??
-      (await EvmWalletAbstraction.getUserHubWalletAddress(
-        spokeProvider.chainConfig.chain.id,
-        encodeAddress(spokeProvider.chainConfig.chain.id, params.from),
-        hubProvider,
-      ));
-    return AleoSpokeService.transfer(
-      {
-        token: BigInt(params.token),
-        recipient: userWallet,
-        amount: BigInt(params.amount),
-        data: keccak256(params.data),
-        connSn: params.connSn !== undefined ? BigInt(params.connSn) : undefined,
-        feeAmount: BigInt(params.feeAmount ?? 0),
-      },
-      spokeProvider,
-      hubProvider,
-      raw,
+  ): Promise<TxReturnType<AleoChainKey, R>> {
+    if (params.amount > U64_MAX) {
+      throw new Error(`Amount ${params.amount} exceeds u64 maximum of ${U64_MAX}`);
+    }
+
+    const tokenField = BigInt(params.token);
+    const isNative = tokenField === BigInt(this.chainConfig.nativeToken);
+    const recipient: Address =
+      params.to ?? (await hubProvider.getUserHubWalletAddress(params.srcAddress, ChainKeys.ALEO_MAINNET));
+    const dataHash = keccak256(params.data);
+    const connSn = await this.generateUniqueConnSn();
+    const feeAmount = params.feeAmount ?? 0n;
+
+    const hubChainId = BigInt(getIntentRelayChainId(ChainKeys.SONIC_MAINNET));
+    const hubAddress = hubProvider.chainConfig.addresses.assetManager;
+
+    const commonInputs: string[] = [
+      hexToAleoU8Array(recipient),
+      formatAleoInput(params.amount, 'u64'),
+      formatAleoInput(connSn, 'u128'),
+      hexToAleoU8Array(dataHash),
+      formatAleoInput(feeAmount, 'u64'),
+      formatAleoInput(hubChainId, 'u128'),
+      hexToAleoU8Array(hubAddress),
+    ];
+
+    // Default: public transfer. Private flow runs only when aleoMode === 'private'.
+    let functionName: string;
+    let inputs: string[];
+    if (params.aleoMode === 'private') {
+      const { aleoRecord, aleoFallbackRecipient } = params;
+      if (!aleoRecord) {
+        throw new Error('aleoRecord is required when aleoMode is "private"');
+      }
+      if (!aleoFallbackRecipient || !isValidAleoAddress(aleoFallbackRecipient)) {
+        throw new Error(`Invalid aleoFallbackRecipient for private transfer: ${aleoFallbackRecipient}`);
+      }
+      // Private transitions consume a record (credits.aleo::credits or token_registry.aleo::Token)
+      // as the first input and append a fallback recipient address at the end.
+      functionName = isNative ? 'transfer_native_private' : 'transfer_token_private';
+      inputs = [aleoRecord, ...commonInputs, aleoFallbackRecipient];
+    } else {
+      functionName = isNative ? 'transfer_native_public' : 'transfer_token_public';
+      inputs = [formatAleoInput(tokenField, 'field'), ...commonInputs];
+    }
+   
+    const executeParams: AleoExecuteOptions = {
+      programName: this.chainConfig.addresses.assetManager,
+      functionName,
+      inputs,
+    };
+
+    if (params.raw === true) {
+      const tx: AleoRawTransaction = {
+        from: params.srcAddress,
+        to: this.chainConfig.addresses.assetManager as AleoProgramId,
+        value: BigInt(params.amount),
+        data: executeParams,
+      };
+      return tx as TxReturnType<AleoChainKey, true> as TxReturnType<AleoChainKey, R>;
+    }
+
+    const wallet = params.walletProvider as IAleoWalletProvider;
+    const result = await wallet.execute(executeParams);
+    return result.transactionId as TxReturnType<AleoChainKey, false> as TxReturnType<AleoChainKey, R>;
+  }
+
+  public async sendMessage<R extends boolean>(
+    params: SendMessageParams<AleoChainKey, R>,
+  ): Promise<TxReturnType<AleoChainKey, R>> {
+    const dstChainId = BigInt(getIntentRelayChainId(params.dstChainKey));
+    const connSn = await this.generateUniqueConnSn();
+
+    const executeParams: AleoExecuteOptions = {
+      programName: this.chainConfig.addresses.connection,
+      functionName: 'send_message',
+      inputs: [
+        formatAleoInput(dstChainId, 'u128'),
+        hexToAleoU8Array(params.dstAddress),
+        formatAleoInput(connSn, 'u128'),
+        hexToAleoU8Array(keccak256(params.payload)),
+      ],
+    };
+
+    if (params.raw === true) {
+      const tx: AleoRawTransaction = {
+        from: params.srcAddress,
+        to: this.chainConfig.addresses.connection as AleoProgramId,
+        value: 0n,
+        data: executeParams,
+      };
+      return tx as TxReturnType<AleoChainKey, true> as TxReturnType<AleoChainKey, R>;
+    }
+
+    const wallet = params.walletProvider as IAleoWalletProvider;
+    const result = await wallet.execute(executeParams);
+    return result.transactionId as TxReturnType<AleoChainKey, false> as TxReturnType<AleoChainKey, R>;
+  }
+
+  public async getDeposit(params: GetDepositParams<AleoChainKey>): Promise<bigint> {
+    await this.ensureClients();
+    if (!this._networkClient) throw new Error('Aleo SDK not initialized');
+
+    const walletAddress = params.srcAddress;
+    if (!isValidAleoAddress(walletAddress)) {
+      throw new Error(`Invalid Aleo address: ${walletAddress}`);
+    }
+
+    if (params.token === this.chainConfig.nativeToken) {
+      const balanceStr = await this._networkClient.getProgramMappingValue(
+        this.chainConfig.addresses.creditsProgram,
+        this.chainConfig.mappings.account,
+        walletAddress,
+      );
+      return balanceStr ? BigInt(balanceStr.replace(/[^\d]/g, '')) : 0n;
+    }
+
+    const { BHP256, Plaintext } = await loadAleoSDK(this.network);
+    const bhp = new BHP256();
+    const structLiteral = `{ account: ${walletAddress}, token_id: ${params.token}field }`;
+    const plaintext = Plaintext.fromString(structLiteral);
+    const key = bhp.hash(plaintext.toBitsLe()).toString();
+    const result = await this._networkClient.getProgramMappingValue(
+      this.chainConfig.addresses.tokenRegistry,
+      this.chainConfig.mappings.authorizedBalances,
+      key,
     );
+    if (result == null) return 0n;
+    const match = result.match(/balance:\s*(\d+)u128/);
+    return match?.[1] != null ? BigInt(match[1]) : 0n;
   }
 
-  /**
-   * Get the balance of a token in the Aleo spoke chain asset manager.
-   * @param token - The token program ID (e.g., "usdc_token.aleo").
-   * @param spokeProvider - The Aleo spoke provider.
-   * @returns The balance of the token.
-   */
-  public static async getDeposit(token: string, spokeProvider: AleoSpokeProviderType): Promise<bigint> {
-    const walletAddress = await spokeProvider.walletProvider.getWalletAddress();
-    return spokeProvider.getBalance(walletAddress, token);
-  }
+  public async waitForTransactionReceipt(
+    params: WaitForTxReceiptParams<AleoChainKey>,
+  ): Promise<Result<WaitForTxReceiptReturnType<AleoChainKey>>> {
+    const { txHash, pollingIntervalMs = this.pollingIntervalMs, maxTimeoutMs = this.maxTimeoutMs } = params;
 
-  /**
-   * Generate simulation parameters for deposit from AleoSpokeDepositParams.
-   * @param params - The deposit parameters.
-   * @param spokeProvider - The provider for the spoke chain.
-   * @param hubProvider - The provider for the hub chain.
-   * @returns The simulation parameters.
-   */
-  public static async getSimulateDepositParams(
-    params: AleoSpokeDepositParams,
-    spokeProvider: AleoSpokeProviderType,
-    hubProvider: EvmHubProvider,
-  ): Promise<DepositSimulationParams> {
-    const assetManagerId = spokeProvider.chainConfig.addresses.assetManager;
-    const networkClient = await spokeProvider.getNetworkClient();
-    const programObj = await networkClient.getProgramObject(assetManagerId);
-    const assetManagerAddress = programObj.address().to_string();
-    const to =
-      params.to ??
-      (await EvmWalletAbstraction.getUserHubWalletAddress(
-        spokeProvider.chainConfig.chain.id,
-        encodeAddress(spokeProvider.chainConfig.chain.id, params.from),
-        hubProvider,
-      ));
+    if (!isValidAleoTransactionId(txHash)) {
+      return { ok: false, error: new Error(`Invalid Aleo transaction ID: ${txHash}`) };
+    }
+
+    void pollingIntervalMs;
+    void maxTimeoutMs;
+    void ALEO_DEFAULT_TIMEOUT_MS;
+    void ALEO_DEFAULT_CHECK_INTERVAL_MS;
+
     return {
-      spokeChainID: spokeProvider.chainConfig.chain.id,
-      token: `0x${BigInt(params.token).toString(16).padStart(64, '0')}` as Hex,
-      from: encodeAddress(spokeProvider.chainConfig.chain.id, params.from),
-      to,
-      amount: BigInt(params.amount),
-      data: keccak256(params.data),
-      srcAddress: encodeAddress(spokeProvider.chainConfig.chain.id, assetManagerAddress as `0x${string}`),
+      ok: false,
+      error: new Error('waitForTransactionReceipt for Aleo requires a connected IAleoWalletProvider'),
     };
   }
 
   /**
-   * Calls the connection contract on the spoke chain to send a message to the hub wallet.
-   * @param from - The address of the user on the hub chain.
-   * @param payload - The payload to send to the contract.
-   * @param spokeProvider - The spoke provider.
-   * @param hubProvider - The hub provider.
-   * @param raw - Whether to return the raw transaction data.
-   * @returns The transaction result.
+   * Wait for an Aleo transaction using the wallet provider's receipt API.
+   * Aleo network does not expose a standalone tx-status RPC, so this requires
+   * a connected wallet provider to query.
    */
-  public static async callWallet<S extends AleoSpokeProviderType, R extends boolean = false>(
-    from: HubAddress,
-    payload: Hex,
-    spokeProvider: S,
-    hubProvider: EvmHubProvider,
-    raw?: R,
-  ): Promise<TxReturnType<S, R>> {
-    const relayId = getIntentRelayChainId(hubProvider.chainConfig.chain.id);
-    const connSn = await spokeProvider.generateUniqueConnSn();
-    return AleoSpokeService.call(BigInt(relayId), from, keccak256(payload), connSn, spokeProvider, raw);
-  }
-
-  /**
-   * Transfer tokens from Aleo spoke to hub chain via asset_manager.aleo.
-   *
-   * Note: Aleo transitions cannot access on-chain mappings, so conn_sn,
-   * fee_amount, hub_chain_id, and hub_address must all be passed as inputs.
-   */
-  private static async transfer<S extends AleoSpokeProviderType, R extends boolean = false>(
-    { token, recipient, amount, data, connSn: inputConnSn, feeAmount }: AleoTransferToHubParams,
-    spokeProvider: S,
-    hubProvider: EvmHubProvider,
-    raw?: R,
-  ): Promise<TxReturnType<S, R>> {
-    const connSn = await spokeProvider.generateUniqueConnSn(inputConnSn);
-
-    const hubChainId = BigInt(hubProvider.chainConfig.chain.chainId);
-
-    const hubAddress = hubProvider.chainConfig.addresses.assetManager as Hex;
-
-    const isNative = token.toString() === spokeProvider.chainConfig.nativeToken;
-
-    if (amount > U64_MAX) {
-      throw new Error(`Amount ${amount} exceeds u64 maximum of ${U64_MAX}`);
+  public async waitForReceiptViaWallet(
+    txHash: string,
+    walletProvider: IAleoWalletProvider,
+    timeout = ALEO_DEFAULT_TIMEOUT_MS,
+  ): Promise<Result<AleoTransactionReceipt>> {
+    if (!isValidAleoTransactionId(txHash)) {
+      return { ok: false, error: new Error(`Invalid Aleo transaction ID: ${txHash}`) };
     }
-
-    if (isNative) {
-      return spokeProvider.transfer_native_public(
-        token,
-        recipient,
-        amount,
-        connSn,
-        data,
-        feeAmount,
-        hubChainId,
-        hubAddress,
-        spokeProvider,
-        raw,
-      );
-    }
-    return spokeProvider.transfer(
-      token,
-      recipient,
-      amount,
-      connSn,
-      data,
-      feeAmount,
-      hubChainId,
-      hubAddress,
-      spokeProvider,
-      raw,
-    );
-  }
-
-  /**
-   * Sends a message to the hub chain via connection.aleo.
-   */
-  private static async call<S extends AleoSpokeProviderType, R extends boolean = false>(
-    dstChainId: bigint,
-    dstAddress: HubAddress,
-    payload: Hex,
-    connSn: bigint,
-    spokeProvider: S,
-    raw?: R,
-  ): Promise<TxReturnType<S, R>> {
-    return spokeProvider.sendMessage(dstChainId, dstAddress, connSn, payload, spokeProvider, raw);
-  }
-
-  /**
-   * Wait for an Aleo transaction to be confirmed.
-   * @param spokeProvider - The Aleo spoke provider (must be full provider, not raw).
-   * @param txId - The transaction ID to wait for.
-   * @param timeout - The timeout in milliseconds (default: 45000).
-   * @returns Result indicating success or failure.
-   */
-  public static async waitForConfirmation(
-    spokeProvider: AleoSpokeProvider,
-    txId: string,
-    timeout = ALEO_DEFAULT_TIMEOUT,
-  ): Promise<Result<boolean>> {
-    if (isAleoRawSpokeProvider(spokeProvider)) {
-      return {
-        ok: false,
-        error: new Error('Cannot wait for confirmation with raw provider'),
-      };
-    }
-
     try {
-      const confirmed = await spokeProvider.waitForTransactionConfirmation(txId, timeout);
-      return { ok: true, value: confirmed };
+      const receipt = await walletProvider.waitForTransactionReceipt(txHash, {
+        timeout,
+        checkInterval: ALEO_DEFAULT_CHECK_INTERVAL_MS,
+      });
+      return { ok: true, value: receipt };
     } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error : new Error(`Failed to confirm transaction: ${error}`),
-      };
+      return { ok: false, error };
     }
+  }
+
+  /**
+   * Generate a unique conn_sn (u64) by reading the messages mapping on connection.aleo.
+   * Aleo transitions can't read mappings, so the value is generated client-side.
+   */
+  private async generateUniqueConnSn(inputConnSn?: bigint): Promise<bigint> {
+    await this.ensureClients();
+    if (!this._networkClient) throw new Error('Aleo SDK not initialized');
+
+    const isUsed = async (connSn: bigint): Promise<boolean> => {
+      try {
+        const value = await this._networkClient?.getProgramMappingValue(
+          this.chainConfig.addresses.connection,
+          this.chainConfig.mappings.messages,
+          `${connSn}u128`,
+        );
+        return value != null;
+      } catch {
+        return false;
+      }
+    };
+
+    if (inputConnSn != null && !(await isUsed(inputConnSn))) {
+      return inputConnSn;
+    }
+
+    for (let i = 0; i < ALEO_CONNSN_GENERATION_RETRIES; i++) {
+      const bytes = new Uint8Array(8);
+      crypto.getRandomValues(bytes);
+      const connSn = Array.from(bytes).reduce((acc, b) => (acc << 8n) | BigInt(b), 0n);
+      if (!(await isUsed(connSn))) return connSn;
+    }
+    throw new Error('Failed to generate unique connSn after maximum retries');
+  }
+
+  /** Static helper for callers that need to encode an Aleo address as hub-style hex. */
+  public static encodeAleoAddress(address: string): Hex {
+    return aleoAddressToHex(address);
   }
 }

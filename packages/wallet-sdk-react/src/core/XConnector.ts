@@ -1,5 +1,6 @@
 import type { ChainType } from '@sodax/types';
-import type { XAccount } from '../types';
+import type { XAccount } from '@/types/index.js';
+import type { IXConnector } from '@/types/interfaces.js';
 
 /**
  * Base class for wallet provider connectors that handles connection management and wallet interactions
@@ -12,7 +13,7 @@ import type { XAccount } from '../types';
  * @property {string | undefined} _icon - Optional icon URL for the wallet provider
  */
 
-export abstract class XConnector {
+export abstract class XConnector implements IXConnector {
   /** The blockchain type this connector supports */
   public readonly xChainType: ChainType;
 
@@ -20,10 +21,10 @@ export abstract class XConnector {
   public readonly name: string;
 
   /** Unique identifier for the connector */
-  private readonly _id: string;
+  public readonly _id: string;
 
   /** Optional icon URL for the wallet provider */
-  private readonly _icon?: string;
+  public readonly _icon?: string;
 
   constructor(xChainType: ChainType, name: string, id: string) {
     this.xChainType = xChainType;
@@ -50,5 +51,21 @@ export abstract class XConnector {
   /** Get the optional icon URL for this wallet provider */
   public get icon(): string | undefined {
     return this._icon;
+  }
+
+  /**
+   * True when the wallet extension backing this connector is installed.
+   * Default: true (for provider-managed chains where connector presence already
+   * implies install — EVM via EIP-6963, Solana/Sui via adapter discovery).
+   * Subclasses backed by extension injection (Bitcoin, ICON, Stacks) override
+   * this with a window probe.
+   */
+  public get isInstalled(): boolean {
+    return true;
+  }
+
+  /** URL to install the wallet extension when missing. Subclasses override. */
+  public get installUrl(): string | undefined {
+    return undefined;
   }
 }

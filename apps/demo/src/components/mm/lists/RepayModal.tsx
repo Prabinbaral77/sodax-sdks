@@ -1,11 +1,10 @@
 import { useAppStore } from '@/zustand/useAppStore';
-import { useMMAllowance, useMMApprove, useRepay, useSpokeProvider } from '@sodax/dapp-kit';
-import type { ChainId, MoneyMarketRepayParams, XToken } from '@sodax/sdk';
-import { baseChainInfo } from '@sodax/types';
+import { useMMAllowance, useMMApprove, useRepay, useSodaxContext, useXBalances } from '@sodax/dapp-kit';
+import type { MoneyMarketRepayParams } from '@sodax/sdk';
+import { type SpokeChainKey, type XToken, baseChainInfo } from '@sodax/sdk';
 import { useEvmSwitchChain, useWalletProvider } from '@sodax/wallet-sdk-react';
 import React, { useMemo, useState, useEffect } from 'react';
 import { formatUnits, parseUnits } from 'viem';
-import { useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
   DialogContent,
@@ -24,11 +23,12 @@ import {
   getNativeTokenSymbol,
   formatDecimalForDisplay,
   getSafeMaxAmountForInput,
+  truncateToDecimals,
 } from '@/lib/utils';
+import { AMOUNT_DISPLAY_DECIMALS } from '../constants';
 import { logger } from '@/lib/logger';
-import { useXBalances, useXAccount } from '@sodax/wallet-sdk-react';
+import { getXChainType, useXAccount, useXService } from '@sodax/wallet-sdk-react';
 import { getChainName } from '@/constants';
-import { invalidateMmQueries } from '@/lib/invalidateMmQueries';
 import { extractTxHash } from '@/lib/extractTxHash';
 import { ActionSuccessContent, type ActionSuccessData } from './ActionSuccessContent';
 import { Loader2 } from 'lucide-react';
@@ -41,15 +41,15 @@ interface RepayModalProps {
   onOpenChange: (open: boolean) => void;
   token: XToken;
   maxDebt: string;
-  /** Chain where the debt lives (market/collateral chain). Used for toChainId and initial fromChainId. */
-  debtChainId?: ChainId;
-  //If true, shows success screen inline instead of closing and calling onSuccess.
-  inlineSuccess?: boolean; //Called on success. Only used when inlineSuccess is false.
+  /** Chain where the debt lives (market/collateral chain). Used for dstChainKey and initial fromChainId. */
+  debtChainId?: SpokeChainKey;
+  // If true, shows success screen inline instead of closing and calling onSuccess.
+  inlineSuccess?: boolean; // Called on success. Only used when inlineSuccess is false.
   onSuccess?: (data: {
     amount: string;
     token: XToken;
-    sourceChainId: ChainId;
-    destinationChainId: ChainId;
+    sourceChainId: SpokeChainKey;
+    destinationChainId: SpokeChainKey;
     txHash?: `0x${string}`;
   }) => void;
 }
@@ -65,21 +65,15 @@ export function RepayModal({
 }: RepayModalProps) {
   const [amount, setAmount] = useState('');
   const [error, setError] = useState<string | null>(null);
-  // UI state: tracks whether to show form or success screen within the same dialog
   const [step, setStep] = useState<'form' | 'success'>('form');
-  // Stores success data (amount, token, txHash) when transaction completes, for displaying success screen
   const [successData, setSuccessData] = useState<ActionSuccessData | null>(null);
-  // Track when approve button is clicked to show "Approving..." immediately
-  const [isApprovingLocal, setIsApprovingLocal] = useState(false);
   const { selectedChainId: selectedMarketChainId, openWalletModal } = useAppStore();
+  const { sodax } = useSodaxContext();
 
-  // Debt chain = where the debt lives (market/collateral chain). Must match the row/list context.
-  const debtChainId = debtChainIdProp ?? token.xChainId ?? selectedMarketChainId;
-  const [fromChainId, setFromChainId] = useState(debtChainId);
-  // toChainId = market chain where debt is recorded (where collateral is); fixed for this modal session
+  const debtChainId = debtChainIdProp ?? token.chainKey ?? selectedMarketChainId;
+  const [fromChainId, setFromChainId] = useState<SpokeChainKey>(debtChainId);
   const toChainId = debtChainId;
 
-  // When modal opens, default "Repay from" to the debt chain so balance/context match the row
   const prevOpenRef = React.useRef(false);
   useEffect(() => {
     const justOpened = open && !prevOpenRef.current;
@@ -88,33 +82,25 @@ export function RepayModal({
       setFromChainId(debtChainId);
     }
   }, [open, debtChainId]);
-  const { address: fromAddress } = useXAccount(fromChainId);
-  const { address: toAddress } = useXAccount(toChainId);
-  const queryClient = useQueryClient();
+  const { address: fromAddress } = useXAccount({ xChainId: fromChainId });
+  const { address: toAddress } = useXAccount({ xChainId: toChainId });
 
-  const sourceToken = getTokenOnChain(token.symbol, fromChainId);
+  const sourceToken = getTokenOnChain(sodax, token.symbol, fromChainId);
 
-  // Wallet provider for the source (repay) chain
-  const sourceWalletProvider = useWalletProvider(fromChainId);
-
-  // Spoke provider where the actual repay happens (source chain)
-  const sourceSpokeProvider = useSpokeProvider(fromChainId, sourceWalletProvider);
+  const sourceWalletProvider = useWalletProvider({ xChainId: fromChainId });
 
   const { mutateAsync: repay, isPending } = useRepay();
   const { mutateAsync: approve, isPending: isApproving } = useMMApprove();
 
-  const repayableChains = getChainsWithThisToken(token);
+  const repayableChains = getChainsWithThisToken(sodax, token);
 
-  // Source chain params (where funds come from)
   const sourceParams: MoneyMarketRepayParams | undefined = useMemo(() => {
     if (!amount || !sourceToken) return undefined;
 
-    // Validate addresses exist
     if (!fromAddress || !toAddress) {
-      return undefined; // Addresses not available yet
+      return undefined;
     }
 
-    // Only validate EVM address format for EVM chains (for fromAddress)
     const fromChainInfo = baseChainInfo[fromChainId as keyof typeof baseChainInfo];
     if (fromChainInfo?.type === 'EVM' && !isValidEvmAddress(fromAddress)) {
       throw new Error(
@@ -122,7 +108,6 @@ export function RepayModal({
       );
     }
 
-    // Only validate EVM address format for EVM chains (for toAddress)
     const toChainInfo = baseChainInfo[toChainId as keyof typeof baseChainInfo];
     if (toChainInfo?.type === 'EVM' && !isValidEvmAddress(toAddress)) {
       throw new Error(
@@ -132,25 +117,28 @@ export function RepayModal({
 
     const normalizedAmount = amount.replace(',', '.');
     return {
+      srcChainKey: fromChainId,
+      srcAddress: fromAddress,
       token: sourceToken.address,
       amount: parseUnits(normalizedAmount, sourceToken.decimals),
       action: 'repay',
-      toChainId: toChainId,
-      toAddress: toAddress, // Address on the market chain (where debt lives)
+      dstChainKey: toChainId,
+      dstAddress: toAddress,
     };
   }, [amount, sourceToken, toChainId, fromAddress, toAddress, fromChainId]);
 
-  // Check allowance on the source chain (where tokens are spent)
   const { data: sourceAllowed, isLoading: isSourceAllowanceLoading } = useMMAllowance({
-    params: sourceParams,
-    spokeProvider: sourceSpokeProvider,
+    params: { payload: sourceParams },
   });
 
-  // Check user balance on source chain
+  const xService = useXService({ xChainType: getXChainType(fromChainId) });
   const { data: balances, isLoading: isBalancesLoading } = useXBalances({
-    xChainId: fromChainId,
-    xTokens: sourceToken ? [sourceToken] : [],
-    address: fromAddress,
+    params: {
+      xService,
+      xChainId: fromChainId,
+      xTokens: sourceToken ? [sourceToken] : [],
+      address: fromAddress,
+    },
   });
 
   const userBalance =
@@ -161,53 +149,29 @@ export function RepayModal({
   const amountNum = Number(amount.replace(',', '.') || 0);
   const insufficientBalance = userBalance !== undefined && amountNum > userBalance;
 
-  // If allowance is unknown/loading, assume approval is needed (show Approve button).
-  // Only show action button when we know allowance exists.
   const hasSourceAllowance = sourceAllowed === true;
-  // Track if we're in a transitional state (approving or checking allowance after approval)
-  // Use local state OR hook state to ensure immediate UI feedback
-  const isActuallyApproving = isApproving || isApprovingLocal;
 
-  // Show approval needed if allowance is explicitly false or undefined
-  // Don't show approval needed while approving or refetching allowance (to prevent button flicker)
   const needsSourceApproval =
-    (sourceAllowed === false || (sourceAllowed === undefined && !isSourceAllowanceLoading)) && !isActuallyApproving;
+    (sourceAllowed === false || (sourceAllowed === undefined && !isSourceAllowanceLoading)) && !isApproving;
 
-  // Reset local approving state when allowance is confirmed
-  useEffect(() => {
-    if (hasSourceAllowance && isApprovingLocal) {
-      setIsApprovingLocal(false);
-    }
-  }, [hasSourceAllowance, isApprovingLocal]);
+  const { isWrongChain: isWrongSourceChain, handleSwitchChain: handleSwitchToSource } = useEvmSwitchChain({
+    xChainId: fromChainId,
+  });
 
-  // Chain switching hook for the source chain
-  const { isWrongChain: isWrongSourceChain, handleSwitchChain: handleSwitchToSource } = useEvmSwitchChain(fromChainId);
-
-  // Market chain wallet connection guard (toAddress is needed to identify the hub wallet for debt)
   const isMissingMarketChainAddress = !toAddress;
 
   const handleRepay = async (): Promise<void> => {
     setError(null);
 
-    if (!sourceSpokeProvider || !sourceParams) {
-      setError('Missing provider or params');
+    if (!sourceWalletProvider || !sourceParams) {
+      setError('Missing wallet provider or params');
       return;
     }
 
     const normalizedAmount = amount.replace(',', '.');
 
     try {
-      // Wait for transaction to complete
-      const result = await repay({
-        params: sourceParams,
-        spokeProvider: sourceSpokeProvider,
-      });
-
-      invalidateMmQueries(queryClient, {
-        mmChainIds: [toChainId],
-        address: toAddress,
-        balanceChainIds: [fromChainId],
-      });
+      const result = await repay({ params: sourceParams, walletProvider: sourceWalletProvider });
 
       const nextSuccessData: ActionSuccessData = {
         amount: normalizedAmount,
@@ -217,7 +181,6 @@ export function RepayModal({
         txHash: extractTxHash(result),
       };
 
-      // Call success callback
       if (inlineSuccess) {
         setSuccessData(nextSuccessData);
         setStep('success');
@@ -233,20 +196,14 @@ export function RepayModal({
 
   const handleApproveSource = async (): Promise<void> => {
     setError(null);
-    if (!sourceSpokeProvider || !sourceParams) return;
+    if (!sourceWalletProvider || !sourceParams) return;
 
-    setIsApprovingLocal(true);
     try {
-      await approve({
-        params: sourceParams,
-        spokeProvider: sourceSpokeProvider,
-      });
+      await approve({ params: sourceParams, walletProvider: sourceWalletProvider });
     } catch (err: unknown) {
       logger.error('Source approval failed', err);
       setError(getMmErrorText(err) || 'Approval failed');
-      setIsApprovingLocal(false);
     }
-    // Note: isApprovingLocal will be reset when allowance refetch completes and hasSourceAllowance becomes true
   };
 
   const handleMax = () => {
@@ -257,12 +214,8 @@ export function RepayModal({
   };
 
   const isBusy = isPending || isApproving;
-  // Only consider balance "unknown" during initial load, not during background refetches
-  // This prevents flickering: once we have a balance, keep showing it even during refetches
   const isBalanceUnknown = isBalancesLoading || userBalance === undefined;
 
-  // Check if user has any debt to repay (maxDebt > 0)
-  // Handle both '0' and '0.000000' formats
   const maxDebtNum = maxDebt ? Number.parseFloat(maxDebt) : 0;
   const hasDebt = !Number.isNaN(maxDebtNum) && maxDebtNum > 0;
 
@@ -273,11 +226,9 @@ export function RepayModal({
       setError(null);
       setStep('form');
       setSuccessData(null);
-      setIsApprovingLocal(false);
     }
   };
 
-  // Show success screen instead of form when transaction completes and inlineSuccess is enabled
   if (inlineSuccess && step === 'success' && successData) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChangeInternal}>
@@ -297,7 +248,6 @@ export function RepayModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* From Chain (repay from) */}
           <div className="space-y-2">
             <Label>Repay from chain</Label>
             <ChainSelector
@@ -309,11 +259,11 @@ export function RepayModal({
               Debt lives on: <strong>{getChainName(toChainId)}</strong> (cannot be changed)
             </p>
             <p className="text-xs text-muted-foreground">
-              Your balance: {isBalanceUnknown ? '—' : userBalance.toFixed(6)} {sourceToken?.symbol || token.symbol}
+              Your balance: {isBalanceUnknown ? '—' : truncateToDecimals(userBalance, AMOUNT_DISPLAY_DECIMALS)}{' '}
+              {sourceToken?.symbol || token.symbol}
             </p>
           </div>
 
-          {/* Amount Input */}
           <div className="space-y-2">
             <Label htmlFor="amount">Amount</Label>
             <div className="flex items-center gap-2">
@@ -338,11 +288,10 @@ export function RepayModal({
                   Max debt: {formatDecimalForDisplay(maxDebt, 4)} {token.symbol}
                 </p>
               )}
-              {/* Show validation messages only when user enters an amount */}
               {amount &&
                 (() => {
-                  const amountNum = Number.parseFloat(amount.replace(',', '.'));
-                  if (Number.isNaN(amountNum) || amountNum <= 0) return null;
+                  const inputAmountNum = Number.parseFloat(amount.replace(',', '.'));
+                  if (Number.isNaN(inputAmountNum) || inputAmountNum <= 0) return null;
 
                   if (!hasDebt) {
                     return <ErrorAlert text="No debt to repay" variant="compact" />;
@@ -351,14 +300,13 @@ export function RepayModal({
                   if (!isBalanceUnknown && insufficientBalance && !isBusy) {
                     return (
                       <ErrorAlert
-                        text={`Insufficient balance. You have ${userBalance?.toFixed(6)} ${sourceToken?.symbol || token.symbol}, but need ${amountNum.toFixed(6)} ${sourceToken?.symbol || token.symbol}`}
+                        text={`Insufficient balance. You have ${truncateToDecimals(userBalance ?? 0, AMOUNT_DISPLAY_DECIMALS)} ${sourceToken?.symbol || token.symbol}, but need ${truncateToDecimals(inputAmountNum, AMOUNT_DISPLAY_DECIMALS)} ${sourceToken?.symbol || token.symbol}`}
                         variant="compact"
                       />
                     );
                   }
 
-                  const maxDebtNum = Number.parseFloat(maxDebt);
-                  if (!Number.isNaN(maxDebtNum) && amountNum > maxDebtNum) {
+                  if (!Number.isNaN(maxDebtNum) && inputAmountNum > maxDebtNum) {
                     return (
                       <ErrorAlert
                         text={`Amount exceeds maximum debt: ${formatDecimalForDisplay(maxDebt, 6)} ${token.symbol}`}
@@ -375,15 +323,17 @@ export function RepayModal({
 
         {error && <ErrorAlert text={error} />}
 
-        {/* Gas fee warning - only show when user can actually repay */}
         {!isWrongSourceChain &&
           amount &&
           !insufficientBalance &&
           hasDebt &&
           (() => {
-            const amountNum = Number.parseFloat(amount.replace(',', '.'));
-            const maxDebtNum = Number.parseFloat(maxDebt);
-            return !Number.isNaN(amountNum) && amountNum > 0 && (Number.isNaN(maxDebtNum) || amountNum <= maxDebtNum);
+            const inputAmountNum = Number.parseFloat(amount.replace(',', '.'));
+            return (
+              !Number.isNaN(inputAmountNum) &&
+              inputAmountNum > 0 &&
+              (Number.isNaN(maxDebtNum) || inputAmountNum <= maxDebtNum)
+            );
           })() && (
             <p className="text-xs text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-200 dark:border-amber-800">
               Make sure you have enough <strong>{getNativeTokenSymbol(fromChainId)}</strong> on{' '}
@@ -397,7 +347,7 @@ export function RepayModal({
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               Repaying…
             </Button>
-          ) : isActuallyApproving ? (
+          ) : isApproving ? (
             <Button className="w-full" disabled>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               Approving…

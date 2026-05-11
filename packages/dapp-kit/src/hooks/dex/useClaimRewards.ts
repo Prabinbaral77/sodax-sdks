@@ -1,68 +1,49 @@
-import type {
-  ConcentratedLiquidityClaimRewardsParams,
-  ConcentratedLiquidityError,
-  ConcentratedLiquidityErrorCode,
-  SpokeProvider,
-  SpokeTxHash,
-  HubTxHash,
-} from '@sodax/sdk';
-import { useSodaxContext } from '../shared/useSodaxContext';
-import { useMutation, type UseMutationResult, useQueryClient } from '@tanstack/react-query';
-
-export type UseClaimRewardsParams = {
-  params: ConcentratedLiquidityClaimRewardsParams;
-  spokeProvider: SpokeProvider;
-};
+// packages/dapp-kit/src/hooks/dex/useClaimRewards.ts
+import type { ClLiquidityClaimRewardsAction, SpokeChainKey, TxHashPair } from '@sodax/sdk';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSodaxContext } from '../shared/useSodaxContext.js';
+import type { MutationHookParams } from '../shared/types.js';
+import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
+import { unwrapResult } from '../shared/unwrapResult.js';
 
 /**
- * React hook for creating a mutation to claim DEX rewards for a concentrated liquidity position.
- *
- * @returns {UseMutationResult<[SpokeTxHash, HubTxHash], ConcentratedLiquidityError<ConcentratedLiquidityErrorCode>, UseClaimRewardsParams>}
- *   Returns a react-query mutation result object:
- *   - On success: resolves to a tuple `[SpokeTxHash, HubTxHash]`.
- *   - On error: the error is of type `ConcentratedLiquidityError<ConcentratedLiquidityErrorCode>`.
- *   - The mutation function expects an argument of type {@link UseClaimRewardsParams}
- *     containing `params` (the claim parameters) and `spokeProvider` (the target provider).
- *   - On mutation success, invalidates the queries `'dex/poolBalances'` and `'dex/positionInfo'`.
- *
- * @example
- * const claimRewardsMutation = useClaimRewards();
- * claimRewardsMutation.mutateAsync({
- *   params: { poolKey, tokenId, tickLower, tickUpper },
- *   spokeProvider,
- * });
+ * Mutation variables for {@link useClaimRewards}. Generic over `K extends SpokeChainKey` (defaults
+ * to the full union). Sophisticated callers can lock K at the hook call site to narrow the
+ * `walletProvider` and `params.srcChainKey` types.
  */
-export function useClaimRewards(): UseMutationResult<
-  [SpokeTxHash, HubTxHash],
-  ConcentratedLiquidityError<ConcentratedLiquidityErrorCode>,
-  UseClaimRewardsParams
+export type UseClaimRewardsVars<K extends SpokeChainKey = SpokeChainKey> = Omit<
+  ClLiquidityClaimRewardsAction<K, false>,
+  'raw'
+>;
+
+/**
+ * React hook for claiming accrued fees on a concentrated-liquidity position.
+ *
+ * Throws on SDK failure so React Query's native error model engages (`isError`, `error`,
+ * `onError`, `retry`). Returns the unwrapped `TxHashPair` on success.
+ */
+export function useClaimRewards<K extends SpokeChainKey = SpokeChainKey>({
+  mutationOptions,
+}: MutationHookParams<TxHashPair, UseClaimRewardsVars<K>> = {}): SafeUseMutationResult<
+  TxHashPair,
+  Error,
+  UseClaimRewardsVars<K>
 > {
   const { sodax } = useSodaxContext();
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ params, spokeProvider }: UseClaimRewardsParams) => {
-      if (!spokeProvider) {
-        throw new Error('Spoke provider is required');
-      }
-      const result = await sodax.dex.clService.claimRewards({
-        params,
-        spokeProvider,
-      });
-
-      if (!result.ok) {
-        throw new Error(`Claim rewards failed: ${result.error?.code || 'Unknown error'}`);
-      }
-
-      return result.value;
-    },
-    onSuccess: (_, { params, spokeProvider }) => {
-      // Invalidate relevant queries
+  return useSafeMutation<TxHashPair, Error, UseClaimRewardsVars<K>>({
+    mutationKey: ['dex', 'claimRewards'],
+    ...mutationOptions,
+    mutationFn: async vars => unwrapResult(await sodax.dex.clService.claimRewards({ ...vars, raw: false })),
+    onSuccess: async (data, vars, ctx) => {
+      const { params } = vars;
+      // `usePositionInfo` keys by string tokenId — stringify the bigint to keep the structural match.
       queryClient.invalidateQueries({
-        queryKey: ['dex', 'poolBalances', params.poolKey, spokeProvider.chainConfig.chain.id],
+        queryKey: ['dex', 'positionInfo', params.tokenId.toString(), params.poolKey],
       });
-      queryClient.invalidateQueries({ queryKey: ['dex', 'positionInfo', params.tokenId, params.poolKey] });
-      queryClient.invalidateQueries({ queryKey: ['dex', 'poolData', params.poolKey] });
+      queryClient.invalidateQueries({ queryKey: ['dex', 'poolBalances', params.srcChainKey, params.srcAddress] });
+      await mutationOptions?.onSuccess?.(data, vars, ctx);
     },
   });
 }

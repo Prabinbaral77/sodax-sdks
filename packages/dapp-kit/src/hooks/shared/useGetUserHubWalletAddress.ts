@@ -1,7 +1,16 @@
-import { type SpokeProvider, type SpokeChainId, HubService } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { useSodaxContext } from './useSodaxContext';
+import { useSodaxContext } from './useSodaxContext.js';
 import type { Address } from 'viem';
+import type { ReadHookParams } from './types.js';
+
+export type UseGetUserHubWalletAddressParams = ReadHookParams<
+  Address,
+  {
+    spokeChainId?: SpokeChainKey;
+    spokeAddress?: string;
+  }
+>;
 
 /**
  * Hook for deriving user wallet address for hub abstraction.
@@ -14,41 +23,31 @@ import type { Address } from 'viem';
  * The query is automatically enabled when both `spokeChainId` and `spokeAddress` are provided.
  * This is a deterministic operation, so the result is cached and not refetched automatically.
  *
- * @param spokeChainId - Optional spoke chain ID. If not provided, the query will be disabled.
- * @param spokeAddress - Optional user wallet address on the spoke chain. If not provided, the query will be disabled.
- * @returns A React Query result object containing:
- *   - data: The derived user wallet address (Address) when available
- *   - isLoading: Loading state indicator
- *   - error: Any error that occurred during derivation (Error)
- *
  * @example
  * ```typescript
- * const { data: derivedAddress, isLoading, error } = useDeriveUserWalletAddress(spokeChainId, userAddress);
- *
- * if (isLoading) return <div>Deriving address...</div>;
- * if (error) return <div>Error: {error.message}</div>;
- * if (derivedAddress) return <div>Derived Address: {derivedAddress}</div>;
+ * const { data: derivedAddress, isLoading, error } = useGetUserHubWalletAddress({
+ *   params: { spokeChainId, spokeAddress: userAddress },
+ * });
  * ```
  */
-export function useGetUserHubWalletAddress(
-  spokeChainId?: SpokeChainId | SpokeProvider | undefined,
-  spokeAddress?: string | undefined,
-): UseQueryResult<Address, Error> {
+export function useGetUserHubWalletAddress({
+  params,
+  queryOptions,
+}: UseGetUserHubWalletAddressParams = {}): UseQueryResult<Address, Error> {
   const { sodax } = useSodaxContext();
+  const spokeChainId = params?.spokeChainId;
+  const spokeAddress = params?.spokeAddress;
 
-  return useQuery({
-    queryKey: ['getUserHubWalletAddress', spokeChainId, spokeAddress],
+  return useQuery<Address, Error>({
+    queryKey: ['shared', 'userHubWalletAddress', spokeChainId, spokeAddress],
     queryFn: async (): Promise<Address> => {
       if (!spokeChainId || !spokeAddress) {
         throw new Error('Spoke chain id and address are required');
       }
-
-      // Determine if spokeChainId is a SpokeProvider object or SpokeChainId value
-      spokeChainId = typeof spokeChainId === 'object' ? spokeChainId.chainConfig.chain.id : spokeChainId;
-
-      return await HubService.getUserHubWalletAddress(spokeAddress, spokeChainId, sodax.hubProvider);
+      return await sodax.hubProvider.getUserHubWalletAddress(spokeAddress, spokeChainId);
     },
     enabled: !!spokeChainId && !!spokeAddress,
-    refetchInterval: false, // This is a deterministic operation, no need to refetch
+    refetchInterval: false,
+    ...queryOptions,
   });
 }

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useCancelUnstake, useClaim, useStakingConfig, useUnstakingInfoWithPenalty } from '@sodax/dapp-kit';
 import { Skeleton } from '../ui/skeleton';
 import { formatTokenAmount, getTimeRemaining } from '@/lib/utils';
-import type { SpokeProvider } from '@sodax/sdk';
+import type { SpokeChainKey } from '@sodax/sdk';
+import type { IWalletProvider } from '@sodax/wallet-sdk-react';
 import { Button } from '../ui/button';
 import {
   Dialog,
@@ -14,27 +15,35 @@ import {
 } from '@/components/ui/dialog';
 
 export function UnstakingInfo({
-  spokeProvider,
-  userAddress,
-}: Readonly<{ spokeProvider: SpokeProvider; userAddress: string }>) {
+  srcChainKey,
+  srcAddress,
+  walletProvider,
+}: Readonly<{
+  srcChainKey: SpokeChainKey;
+  srcAddress: `0x${string}`;
+  walletProvider: IWalletProvider;
+}>) {
   const [claimRequestId, setClaimRequestId] = useState<string>('');
-  const { data: unstakingInfoWithPenalty, isLoading: isLoadingUnstakingInfoWithPenalty } = useUnstakingInfoWithPenalty(
-    userAddress,
-    spokeProvider,
-  );
+  const { data: unstakingInfoWithPenalty, isLoading: isLoadingUnstakingInfoWithPenalty } = useUnstakingInfoWithPenalty({
+    params: { srcAddress, srcChainKey },
+  });
   const { data: stakingConfig, isLoading: isLoadingStakingConfig } = useStakingConfig();
 
-  const { mutateAsync: claim, isPending: isClaiming } = useClaim(spokeProvider);
-  const { mutateAsync: cancelUnstake, isPending: isCancellingUnstake } = useCancelUnstake(spokeProvider);
+  const { mutateAsync: claim, isPending: isClaiming } = useClaim();
+  const { mutateAsync: cancelUnstake, isPending: isCancellingUnstake } = useCancelUnstake();
   const [claimDialogOpen, setClaimDialogOpen] = useState(false);
 
-  const handleClaim = async (requestId: string, claimableAmount: bigint) => {
-    if (!spokeProvider) return;
-
+  const handleClaim = async (requestId: string, claimableAmount: bigint): Promise<void> => {
     try {
       await claim({
-        requestId: BigInt(requestId),
-        amount: claimableAmount,
+        params: {
+          srcChainKey,
+          srcAddress,
+          requestId: BigInt(requestId),
+          amount: claimableAmount,
+          action: 'claim',
+        },
+        walletProvider,
       });
       setClaimDialogOpen(false);
       setClaimRequestId('');
@@ -43,14 +52,17 @@ export function UnstakingInfo({
     }
   };
 
-  const handleCancelUnstake = async (requestId: string) => {
-    if (!spokeProvider) return;
-
+  const handleCancelUnstake = async (requestId: string): Promise<void> => {
     try {
       await cancelUnstake({
-        requestId: BigInt(requestId),
+        params: {
+          srcChainKey,
+          srcAddress,
+          requestId: BigInt(requestId),
+          action: 'cancelUnstake',
+        },
+        walletProvider,
       });
-      console.log('Cancel unstake successful');
     } catch (error) {
       console.error('Cancel unstake error:', error);
     }

@@ -15,25 +15,22 @@ import {
   useLiquidityAmounts,
   useSupplyLiquidity,
   useDecreaseLiquidity,
-  useSpokeProvider,
   createDecreaseLiquidityParamsProps,
   createSupplyLiquidityParamsProps,
   useSodaxContext,
 } from '@sodax/dapp-kit';
-import type { Hash } from '@sodax/types';
+import type { Hash } from '@sodax/sdk';
 import { saveTokenIdToLocalStorage } from '@/lib/utils';
 
 export function SimplePoolManager(): JSX.Element {
   const { sodax } = useSodaxContext();
-  // Wallet integration
   const { openWalletModal, selectedChainId, selectChainId } = useAppStore();
-  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain(selectedChainId);
-  const xAccount = useXAccount(selectedChainId);
+  const { isWrongChain, handleSwitchChain } = useEvmSwitchChain({ xChainId: selectedChainId });
+  const xAccount = useXAccount({ xChainId: selectedChainId });
   const disconnect = useXDisconnect();
-  const walletProvider = useWalletProvider(selectedChainId);
-  const spokeProvider = useSpokeProvider(selectedChainId, walletProvider);
+  const walletProvider = useWalletProvider({ xChainId: selectedChainId });
+  const srcAddress = xAccount?.address as `0x${string}` | undefined;
 
-  // Pool state
   const { data: pools = [] } = usePools();
   const [selectedPoolIndex, setSelectedPoolIndex] = useState<number>(-1);
   const selectedPoolKey = selectedPoolIndex >= 0 && pools[selectedPoolIndex] ? pools[selectedPoolIndex] : null;
@@ -41,26 +38,24 @@ export function SimplePoolManager(): JSX.Element {
     data: poolDataRaw,
     isLoading: isLoadingPoolData,
     error: poolDataError,
-  } = usePoolData({
-    poolKey: selectedPoolKey || null,
-  });
+  } = usePoolData({ params: { poolKey: selectedPoolKey || null } });
   const poolData = poolDataRaw ?? null;
 
-  // Pool balances
   const { data: balances } = usePoolBalances({
-    poolData,
-    poolKey: selectedPoolKey || null,
-    spokeProvider: spokeProvider ?? null,
+    params: {
+      poolData,
+      poolKey: selectedPoolKey || null,
+      spokeChainKey: selectedChainId,
+      userAddress: srcAddress,
+    },
   });
   const token0Balance = balances?.token0Balance ?? 0n;
   const token1Balance = balances?.token1Balance ?? 0n;
 
-  // Liquidity supply state
   const [minPrice, setMinPrice] = useState<string>('');
   const [maxPrice, setMaxPrice] = useState<string>('');
-  const [slippageTolerance, setSlippageTolerance] = useState<string>('0.5'); // Default 0.5%
+  const [slippageTolerance, setSlippageTolerance] = useState<string>('0.5');
 
-  // Use liquidity amounts hook
   const {
     liquidityToken0Amount,
     liquidityToken1Amount,
@@ -70,25 +65,23 @@ export function SimplePoolManager(): JSX.Element {
     setLiquidityToken1Amount,
   } = useLiquidityAmounts(minPrice, maxPrice, poolData);
 
-  // Position management state
   const [positionId, setPositionId] = useState<string>('');
   const { data: positionData } = usePositionInfo({
-    tokenId: positionId || null,
-    poolKey: selectedPoolKey || null,
+    params: {
+      tokenId: positionId || null,
+      poolKey: selectedPoolKey || null,
+    },
   });
   const positionInfo = positionData?.positionInfo ?? null;
   const isValidPosition = positionData?.isValid ?? false;
 
-  // UI state
   const [error, setError] = useState<string>('');
 
-  // Reset state when chain changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: setter functions are stable
   useEffect(() => {
     setSelectedPoolIndex(-1);
   }, [selectedChainId]);
 
-  // Handle position info changes - pre-fill price range
   useEffect(() => {
     if (positionInfo && isValidPosition) {
       const minPriceNum = Number(positionInfo.tickLowerPrice.toSignificant(6));
@@ -103,39 +96,19 @@ export function SimplePoolManager(): JSX.Element {
     }
   }, [positionInfo, isValidPosition, positionId, positionData]);
 
-  // Handle pool data errors
   useEffect(() => {
     if (poolDataError) {
       setError(`Failed to load pool data: ${poolDataError.message}`);
     }
   }, [poolDataError]);
 
-  // Hooks for mutations
   const supplyLiquidityMutation = useSupplyLiquidity();
   const decreaseLiquidityMutation = useDecreaseLiquidity();
 
-  // Combined loading state
   const loading = isLoadingPoolData || supplyLiquidityMutation.isPending || decreaseLiquidityMutation.isPending;
 
-  useEffect(() => {
-    if (supplyLiquidityMutation.isSuccess) {
-      setError('');
-    } else if (supplyLiquidityMutation.error) {
-      setError(`Supply liquidity failed: ${supplyLiquidityMutation.error.message}`);
-    }
-  }, [supplyLiquidityMutation.isSuccess, supplyLiquidityMutation.error]);
-
-  useEffect(() => {
-    if (decreaseLiquidityMutation.isSuccess) {
-      setError('');
-    } else if (decreaseLiquidityMutation.error) {
-      setError(`Decrease liquidity failed: ${decreaseLiquidityMutation.error.message}`);
-    }
-  }, [decreaseLiquidityMutation.isSuccess, decreaseLiquidityMutation.error]);
-
-  // Handle supply liquidity
   const handleSupplyLiquidity = async (): Promise<void> => {
-    if (!poolData || !spokeProvider || !selectedPoolKey) {
+    if (!poolData || !walletProvider || !selectedPoolKey || !srcAddress) {
       setError('Please ensure wallet is connected and services are initialized');
       return;
     }
@@ -163,29 +136,31 @@ export function SimplePoolManager(): JSX.Element {
     setError('');
 
     try {
-      const result = await supplyLiquidityMutation.mutateAsync({
-        params: createSupplyLiquidityParamsProps({
-          poolData,
-          poolKey: selectedPoolKey,
-          minPrice,
-          maxPrice,
-          liquidityToken0Amount,
-          liquidityToken1Amount,
-          slippageTolerance,
-          positionId: positionId || null,
-          isValidPosition,
-        }),
-        spokeProvider,
+      const supplyParamsCore = createSupplyLiquidityParamsProps({
+        poolData,
+        poolKey: selectedPoolKey,
+        minPrice,
+        maxPrice,
+        liquidityToken0Amount,
+        liquidityToken1Amount,
+        slippageTolerance,
+        positionId: positionId || null,
+        isValidPosition,
       });
-      const [_, hubTxHash] = result;
-      const mintPositionEvent = await sodax.dex.clService.getMintPositionEvent(hubTxHash as Hash);
-      saveTokenIdToLocalStorage(
-        await spokeProvider.walletProvider.getWalletAddress(),
-        selectedChainId,
-        mintPositionEvent.tokenId.toString(),
-      );
 
-      // Clear form
+      const txHashPair = await supplyLiquidityMutation.mutateAsync({
+        params: { ...supplyParamsCore, srcChainKey: selectedChainId, srcAddress },
+        walletProvider,
+      });
+
+      const { dstChainTxHash } = txHashPair;
+      const mintPositionEventResult = await sodax.dex.clService.getMintPositionEvent(dstChainTxHash as Hash);
+      if (!mintPositionEventResult.ok) {
+        setError(`Failed to get position event: ${mintPositionEventResult.error instanceof Error ? mintPositionEventResult.error.message : 'Unknown error'}`);
+        return;
+      }
+      saveTokenIdToLocalStorage(srcAddress, selectedChainId, mintPositionEventResult.value.tokenId.toString());
+
       setMinPrice('');
       setMaxPrice('');
       setLiquidityToken0Amount('');
@@ -197,9 +172,16 @@ export function SimplePoolManager(): JSX.Element {
     }
   };
 
-  // Handle decrease liquidity
   const handleDecreaseLiquidity = async (): Promise<void> => {
-    if (!poolData || !spokeProvider || !selectedPoolKey || !positionId || !isValidPosition || !positionInfo) {
+    if (
+      !poolData ||
+      !walletProvider ||
+      !selectedPoolKey ||
+      !positionId ||
+      !isValidPosition ||
+      !positionInfo ||
+      !srcAddress
+    ) {
       setError('Please enter a valid position ID first');
       return;
     }
@@ -219,18 +201,19 @@ export function SimplePoolManager(): JSX.Element {
     setError('');
 
     try {
-      await decreaseLiquidityMutation.mutateAsync({
-        params: createDecreaseLiquidityParamsProps({
-          poolKey: selectedPoolKey,
-          tokenId: positionId,
-          percentage: liquidityToken0Amount,
-          positionInfo,
-          slippageTolerance,
-        }),
-        spokeProvider,
+      const decreaseParamsCore = createDecreaseLiquidityParamsProps({
+        poolKey: selectedPoolKey,
+        tokenId: positionId,
+        percentage: liquidityToken0Amount,
+        positionInfo,
+        slippageTolerance,
       });
 
-      // Clear form
+      await decreaseLiquidityMutation.mutateAsync({
+        params: { ...decreaseParamsCore, srcChainKey: selectedChainId, srcAddress },
+        walletProvider,
+      });
+
       setLiquidityToken0Amount('');
       setLiquidityToken1Amount('');
       setError('');
@@ -287,11 +270,11 @@ export function SimplePoolManager(): JSX.Element {
       {!isWrongChain && (
         <PoolInformation poolData={poolData} formatAmount={formatAmount} formatConversionRate={formatConversionRate} />
       )}
-      {!isWrongChain && poolData && spokeProvider && xAccount && selectedPoolKey && selectedChainId && (
+      {!isWrongChain && poolData && walletProvider && xAccount && selectedPoolKey && selectedChainId && (
         <ManageLiquidity
           poolData={poolData}
           xAccount={xAccount}
-          spokeProvider={spokeProvider}
+          walletProvider={walletProvider}
           pools={pools}
           selectedPoolIndex={selectedPoolIndex}
           token0Balance={token0Balance}
