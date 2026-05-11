@@ -1,8 +1,0 @@
-export const SUPPLY_STEP = {
-  SUPPLY_TERMS: 'SUPPLY_TERMS',
-  SUPPLY_APPROVE: 'SUPPLY_APPROVE',
-  SUPPLY_TRANSFER: 'SUPPLY_TRANSFER',
-  SUPPLY_CONFIRM: 'SUPPLY_CONFIRM',
-} as const;
-
-export type SupplyStep = (typeof SUPPLY_STEP)[keyof typeof SUPPLY_STEP];
