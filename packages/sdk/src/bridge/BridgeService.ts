@@ -1,4 +1,3 @@
-import invariant from 'tiny-invariant';
 import {
   type SpokeService,
   Erc20Service,
@@ -30,7 +29,6 @@ import {
   type BridgeLimit,
   type GetAddressType,
   type Result,
-  spokeChainConfig,
   type HubChainKey,
   type TxReturnType,
   type EvmContractCall,
@@ -46,6 +44,21 @@ import {
 import { encodeFunctionData } from 'viem';
 import type { ConfigService } from '../shared/config/ConfigService.js';
 import BigNumber from 'bignumber.js';
+import { lookupFailed, verifyFailed, intentCreationFailed, executionFailed, approveFailed, allowanceCheckFailed } from '../errors/wrappers.js';
+import { mapRelayFailure } from '../errors/relay-error-mapping.js';
+import {
+  type BridgeAllowanceCheckError,
+  type BridgeApproveError,
+  type BridgeCreateIntentError,
+  type BridgeLookupError,
+  type BridgeOrchestrationError,
+  bridgeInvariant,
+  isBridgeAllowanceCheckError,
+  isBridgeApproveError,
+  isBridgeCreateIntentError,
+  isBridgeLookupError,
+  isBridgeOrchestrationError,
+} from './errors.js';
 
 export type CreateBridgeIntentParams<K extends SpokeChainKey = SpokeChainKey> = {
   srcAddress: string;
@@ -126,14 +139,19 @@ export class BridgeService {
    */
   public async isAllowanceValid<S extends SpokeChainKey, Raw extends boolean>(
     _params: BridgeParams<S, Raw>,
-  ): Promise<Result<boolean>> {
+  ): Promise<Result<boolean, BridgeAllowanceCheckError>> {
     const { params } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey };
     try {
-      invariant(params.amount > 0n, 'Amount must be greater than 0');
-      invariant(params.srcToken.length > 0, 'Source asset is required');
+      bridgeInvariant(params.amount > 0n, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+      bridgeInvariant(params.srcToken.length > 0, 'Source asset is required', { ...baseCtx, field: 'srcToken' });
+
+      // Compute the underlying Result<boolean> across chain-type paths, then wrap any
+      // spoke-layer failure as BRIDGE_ALLOWANCE_CHECK_FAILED at the single return point below.
+      let inner: Result<boolean> = { ok: true, value: true };
 
       if (isHubChainKeyType(params.srcChainKey)) {
-        return await this.spoke.isAllowanceValid({
+        inner = await this.spoke.isAllowanceValid({
           srcChainKey: params.srcChainKey,
           token: params.srcToken,
           amount: params.amount,
@@ -143,20 +161,16 @@ export class BridgeService {
             chainId: params.srcChainKey,
           }),
         } satisfies SpokeIsAllowanceValidParamsHub);
-      }
-
-      if (isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
-        return await this.spoke.isAllowanceValid({
+      } else if (isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
+        inner = await this.spoke.isAllowanceValid({
           srcChainKey: params.srcChainKey,
           token: params.srcToken,
           amount: params.amount,
           owner: params.srcAddress,
-          spender: spokeChainConfig[params.srcChainKey].addresses.assetManager,
+          spender: this.config.getChainConfig(params.srcChainKey).addresses.assetManager,
         } satisfies SpokeIsAllowanceValidParamsEvmSpoke);
-      }
-
-      if (isStellarChainKeyType(params.srcChainKey)) {
-        return await this.spoke.isAllowanceValid({
+      } else if (isStellarChainKeyType(params.srcChainKey)) {
+        inner = await this.spoke.isAllowanceValid({
           srcChainKey: params.srcChainKey,
           token: params.srcToken,
           amount: params.amount,
@@ -164,11 +178,16 @@ export class BridgeService {
         } satisfies SpokeIsAllowanceValidParamsStellar);
       }
 
-      return { ok: true, value: true };
-    } catch (error) {
+      if (inner.ok) return inner;
       return {
         ok: false,
-        error,
+        error: allowanceCheckFailed('bridge', inner.error, baseCtx),
+      };
+    } catch (error) {
+      if (isBridgeAllowanceCheckError(error)) return { ok: false, error };
+      return {
+        ok: false,
+        error: allowanceCheckFailed('bridge', error, baseCtx),
       };
     }
   }
@@ -190,16 +209,21 @@ export class BridgeService {
    */
   public async approve<K extends SpokeChainKey, Raw extends boolean>(
     _params: BridgeParams<K, Raw>,
-  ): Promise<Result<TxReturnType<K, Raw>>> {
+  ): Promise<Result<TxReturnType<K, Raw>, BridgeApproveError>> {
     const { params } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey };
+
+    const wrapApproveFailure = (cause: unknown) => approveFailed('bridge', cause, baseCtx);
+
     try {
-      invariant(params.amount > 0n, 'Amount must be greater than 0');
-      invariant(params.srcToken.length > 0, 'Source asset is required');
+      bridgeInvariant(params.amount > 0n, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+      bridgeInvariant(params.srcToken.length > 0, 'Source asset is required', { ...baseCtx, field: 'srcToken' });
 
       if (isHubChainKeyType(params.srcChainKey) || isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
-        invariant(
+        bridgeInvariant(
           isOptionalEvmWalletProviderType(_params.walletProvider),
           'Invalid wallet provider. Expected Evm wallet provider.',
+          { ...baseCtx, field: 'walletProvider' },
         );
         const spender = isHubChainKeyType(params.srcChainKey)
           ? await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey)
@@ -219,9 +243,7 @@ export class BridgeService {
           walletProvider: _params.walletProvider,
         } as SpokeApproveParams<HubChainKey | EvmSpokeOnlyChainKey, Raw>);
 
-        if (!result.ok) {
-          return result;
-        }
+        if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
 
         return {
           ok: true,
@@ -230,9 +252,10 @@ export class BridgeService {
       }
 
       if (isStellarChainKeyType(params.srcChainKey)) {
-        invariant(
+        bridgeInvariant(
           isOptionalStellarWalletProviderType(_params.walletProvider),
           'Invalid wallet provider. Expected Stellar wallet provider.',
+          { ...baseCtx, field: 'walletProvider' },
         );
         const coreParams = {
           srcChainKey: params.srcChainKey,
@@ -254,7 +277,7 @@ export class BridgeService {
               },
         );
 
-        if (!result.ok) return result;
+        if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
 
         return {
           ok: true,
@@ -262,13 +285,16 @@ export class BridgeService {
         };
       }
 
-      return {
-        ok: false,
-        error: new Error('Approval only supported for EVM spoke chains and Stellar'),
-      };
+      // Reached only for chains that don't support approval (Solana, NEAR, Bitcoin, etc.).
+      // Surface as a validation failure rather than a generic Error so consumers can discriminate.
+      bridgeInvariant(
+        false,
+        'Approval only supported for EVM spoke chains and Stellar',
+        { ...baseCtx, field: 'srcChainKey' },
+      );
     } catch (error) {
-      console.error(error);
-      return { ok: false, error };
+      if (isBridgeApproveError(error)) return { ok: false, error };
+      return { ok: false, error: wrapApproveFailure(error) };
     }
   }
 
@@ -307,17 +333,26 @@ export class BridgeService {
    *   const { srcChainTxHash, dstChainTxHash } = result.value;
    * }
    */
-  public async bridge<K extends SpokeChainKey>(_params: BridgeParams<K, false>): Promise<Result<TxHashPair>> {
+  public async bridge<K extends SpokeChainKey>(
+    _params: BridgeParams<K, false>,
+  ): Promise<Result<TxHashPair, BridgeOrchestrationError>> {
     const { params, timeout } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey, dstChainKey: params.dstChainKey };
     try {
       const txResult = await this.createBridgeIntent(_params);
-      if (!txResult.ok) return txResult;
+      // CreateBridgeIntentErrorCode ⊂ BridgeOrchestrationErrorCode, so SodaxError narrows correctly.
+      if (!txResult.ok) return { ok: false, error: txResult.error };
 
       const verifyTxHashResult = await this.spoke.verifyTxHash({
         txHash: txResult.value.tx,
         chainKey: params.srcChainKey,
       });
-      if (!verifyTxHashResult.ok) return verifyTxHashResult;
+      if (!verifyTxHashResult.ok) {
+        return {
+          ok: false,
+          error: verifyFailed('bridge', verifyTxHashResult.error, baseCtx),
+        };
+      }
 
       const packetResult = await relayTxAndWaitPacket({
         srcTxHash: txResult.value.tx,
@@ -326,14 +361,18 @@ export class BridgeService {
         relayerApiEndpoint: this.config.relay.relayerApiEndpoint,
         timeout,
       });
-      if (!packetResult.ok) return packetResult;
+      if (!packetResult.ok) return { ok: false, error: mapRelayFailure(packetResult.error, { feature: 'bridge', action: 'bridge', srcChainKey: baseCtx.srcChainKey, dstChainKey: baseCtx.dstChainKey }) };
 
       return {
         ok: true,
         value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: packetResult.value.dst_tx_hash },
       };
     } catch (error) {
-      return { ok: false, error };
+      if (isBridgeOrchestrationError(error)) return { ok: false, error };
+      return {
+        ok: false,
+        error: executionFailed('bridge', error, baseCtx),
+      };
     }
   }
 
@@ -361,29 +400,33 @@ export class BridgeService {
    */
   async createBridgeIntent<K extends SpokeChainKey, Raw extends boolean>(
     _params: BridgeParams<K, Raw>,
-  ): Promise<Result<IntentTxResult<K, Raw>>> {
+  ): Promise<Result<IntentTxResult<K, Raw>, BridgeCreateIntentError>> {
     const { params, skipSimulation } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey, dstChainKey: params.dstChainKey };
     try {
-      invariant(params.amount > 0n, 'Amount must be greater than 0');
+      bridgeInvariant(params.amount > 0n, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
       const srcToken = this.config.getSpokeTokenFromOriginalAssetAddress(params.srcChainKey, params.srcToken);
       const dstToken = this.config.getSpokeTokenFromOriginalAssetAddress(params.dstChainKey, params.dstToken);
 
       // Vault can only be used on Sonic
-      invariant(srcToken, `Unsupported spoke chain (${params.srcChainKey}) token: ${params.srcToken}`);
+      bridgeInvariant(srcToken, `Unsupported spoke chain (${params.srcChainKey}) token: ${params.srcToken}`,
+        { ...baseCtx, field: 'srcToken' });
       // destination
-      invariant(dstToken, `Unsupported spoke chain (${params.dstChainKey}) token: ${params.dstToken}`);
+      bridgeInvariant(dstToken, `Unsupported spoke chain (${params.dstChainKey}) token: ${params.dstToken}`,
+        { ...baseCtx, field: 'dstToken' });
 
       const personalAddress = params.srcAddress;
       // Bitcoin TRADING mode: use trading wallet for hub wallet derivation (see getEffectiveWalletAddress)
       // NOTE: bitcoin is only enabled in non-raw execution mode == walletProvider is required
       let walletAddress: string = personalAddress;
       if (isBitcoinChainKeyType(params.srcChainKey) && _params.raw === false) {
-        invariant(
+        bridgeInvariant(
           isBitcoinWalletProviderType(_params.walletProvider),
           `Invalid wallet provider for chain key: ${params.srcChainKey}. Expected bitcoin wallet provider.`,
+          { ...baseCtx, field: 'walletProvider' },
         );
-        walletAddress = await this.spoke.bitcoinSpokeService.getEffectiveWalletAddress(personalAddress);
-        await this.spoke.bitcoinSpokeService.radfi.ensureRadfiAccessToken(_params.walletProvider);
+        walletAddress = await this.spoke.bitcoin.getEffectiveWalletAddress(personalAddress);
+        await this.spoke.bitcoin.radfi.ensureRadfiAccessToken(_params.walletProvider);
       }
 
       const hubWallet = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
@@ -415,7 +458,11 @@ export class BridgeService {
 
       if (!txResult.ok) {
         console.error(txResult.error);
-        return txResult;
+        if (isBridgeCreateIntentError(txResult.error)) return { ok: false, error: txResult.error };
+        return {
+          ok: false,
+          error: intentCreationFailed('bridge', txResult.error, baseCtx),
+        };
       }
 
       return {
@@ -427,7 +474,11 @@ export class BridgeService {
       };
     } catch (error) {
       console.error(error);
-      return { ok: false, error };
+      if (isBridgeCreateIntentError(error)) return { ok: false, error };
+      return {
+        ok: false,
+        error: intentCreationFailed('bridge', error, baseCtx),
+      };
     }
   }
 
@@ -501,7 +552,8 @@ export class BridgeService {
         calls.push(Erc20Service.encodeTransfer(dstToken.hubAsset, encodedRecipientAddress, translatedWithdrawAmount));
       }
     } else {
-      invariant(dstToken, `Unsupported hub chain (${params.dstChainKey}) token: ${params.dstToken}`);
+      bridgeInvariant(dstToken, `Unsupported hub chain (${params.dstChainKey}) token: ${params.dstToken}`,
+        { dstChainKey: params.dstChainKey, field: 'dstToken' });
       calls.push(
         EvmAssetManagerService.encodeTransfer(
           dstToken.hubAsset,
@@ -534,14 +586,18 @@ export class BridgeService {
    * @returns `Result<BridgeLimit>` — `{ amount, decimals, type }` where `amount` is the maximum
    *   bridgeable quantity in the token's native base units and `decimals` is its decimal precision.
    */
-  public async getBridgeableAmount(from: XToken, to: XToken): Promise<Result<BridgeLimit>> {
+  public async getBridgeableAmount(from: XToken, to: XToken): Promise<Result<BridgeLimit, BridgeLookupError>> {
+    const baseCtx = { srcChainKey: from.chainKey, dstChainKey: to.chainKey };
     try {
       const fromToken = this.config.getSpokeTokenFromOriginalAssetAddress(from.chainKey, from.address);
       const toToken = this.config.getSpokeTokenFromOriginalAssetAddress(to.chainKey, to.address);
 
-      invariant(fromToken, `Token not found for token ${from.address} on chain ${from.chainKey}`);
-      invariant(toToken, `Token not found for token ${to.address} on chain ${to.chainKey}`);
-      invariant(this.isBridgeable({ from, to }), `Tokens ${from.address} and ${to.address} are not bridgeable`);
+      bridgeInvariant(fromToken, `Token not found for token ${from.address} on chain ${from.chainKey}`,
+        { ...baseCtx, field: 'from' });
+      bridgeInvariant(toToken, `Token not found for token ${to.address} on chain ${to.chainKey}`,
+        { ...baseCtx, field: 'to' });
+      bridgeInvariant(this.isBridgeable({ from, to }), `Tokens ${from.address} and ${to.address} are not bridgeable`,
+        { ...baseCtx });
 
       // we need to check the max deposit of the token on the from chain and the asset manager balance on the to chain
       const [tokenInfos, reserves] = await Promise.all([
@@ -553,10 +609,10 @@ export class BridgeService {
         EvmVaultTokenService.getVaultReserves(toToken.vault, this.hubProvider.publicClient),
       ]);
 
-      invariant(tokenInfos.length === 2, `Expected 2 token infos, got ${tokenInfos.length}`);
+      bridgeInvariant(tokenInfos.length === 2, `Expected 2 token infos, got ${tokenInfos.length}`, baseCtx);
       const [fromTokenInfo, toTokenInfo] = tokenInfos;
-      invariant(fromTokenInfo, 'From token info not found');
-      invariant(toTokenInfo, 'To token info not found');
+      bridgeInvariant(fromTokenInfo, 'From token info not found', { ...baseCtx, field: 'from' });
+      bridgeInvariant(toTokenInfo, 'To token info not found', { ...baseCtx, field: 'to' });
 
       // if the from token to be deposited is not supported, we return 0
       if (from.chainKey !== this.hubProvider.chainConfig.chain.key && !fromTokenInfo.isSupported) {
@@ -613,9 +669,10 @@ export class BridgeService {
       };
     } catch (error) {
       console.error(error);
+      if (isBridgeLookupError(error)) return { ok: false, error };
       return {
         ok: false,
-        error: error,
+        error: lookupFailed('bridge', 'getBridgeableAmount', error, baseCtx),
       };
     }
   }
@@ -646,8 +703,10 @@ export class BridgeService {
   }): boolean {
     try {
       if (!unchecked) {
-        invariant(this.config.isValidSpokeChainKey(from.chainKey), `Invalid spoke chain (${from.chainKey})`);
-        invariant(this.config.isValidSpokeChainKey(to.chainKey), `Invalid spoke chain (${to.chainKey})`);
+        bridgeInvariant(this.config.isValidSpokeChainKey(from.chainKey), `Invalid spoke chain (${from.chainKey})`,
+          { srcChainKey: from.chainKey, field: 'from' });
+        bridgeInvariant(this.config.isValidSpokeChainKey(to.chainKey), `Invalid spoke chain (${to.chainKey})`,
+          { dstChainKey: to.chainKey, field: 'to' });
       }
 
       // Get hub asset info for both source and destination assets
@@ -655,8 +714,10 @@ export class BridgeService {
       const dstToken = this.config.getSpokeTokenFromOriginalAssetAddress(to.chainKey, to.address);
 
       // Check if both assets are supported and have vault information
-      invariant(srcToken, `Token not found for token ${from.address} on chain ${from.chainKey}`);
-      invariant(dstToken, `Token not found for token ${to.address} on chain ${to.chainKey}`);
+      bridgeInvariant(srcToken, `Token not found for token ${from.address} on chain ${from.chainKey}`,
+        { srcChainKey: from.chainKey, field: 'from' });
+      bridgeInvariant(dstToken, `Token not found for token ${to.address} on chain ${to.chainKey}`,
+        { dstChainKey: to.chainKey, field: 'to' });
 
       // Check if the vault addresses are the same (case-insensitive comparison)
       return srcToken.vault.toLowerCase() === dstToken.vault.toLowerCase();
@@ -680,19 +741,26 @@ export class BridgeService {
    * @returns `Result<XToken[]>` — array of destination-chain tokens bridgeable from the source token.
    *   Returns an error result if the source token is not found in the config.
    */
-  public getBridgeableTokens(from: SpokeChainKey, to: SpokeChainKey, token: string): Result<XToken[]> {
+  public getBridgeableTokens(
+    from: SpokeChainKey,
+    to: SpokeChainKey,
+    token: string,
+  ): Result<XToken[], BridgeLookupError> {
+    const baseCtx = { srcChainKey: from, dstChainKey: to };
     try {
       const srcToken = this.config.getSpokeTokenFromOriginalAssetAddress(from, token);
-      invariant(srcToken, `Token not found for token ${token} on chain ${from}`);
+      bridgeInvariant(srcToken, `Token not found for token ${token} on chain ${from}`,
+        { ...baseCtx, field: 'token' });
 
       return {
         ok: true,
         value: this.filterTokensWithSameVault(this.config.spokeChainConfig[to].supportedTokens, to, srcToken),
       };
     } catch (error) {
+      if (isBridgeLookupError(error)) return { ok: false, error };
       return {
         ok: false,
-        error: error,
+        error: lookupFailed('bridge', 'getBridgeableTokens', error, baseCtx),
       };
     }
   }
@@ -746,11 +814,13 @@ export class BridgeService {
    */
   public findTokenBalanceInReserves(reserves: VaultReserves, token: XToken): bigint {
     const hubAsset = this.config.getSpokeTokenFromOriginalAssetAddress(token.chainKey, token.address);
-    invariant(hubAsset, `Token not found for token ${token.address} on chain ${token.chainKey}`);
+    bridgeInvariant(hubAsset, `Token not found for token ${token.address} on chain ${token.chainKey}`,
+      { srcChainKey: token.chainKey, field: 'token' });
     const tokenIndex = reserves.tokens.findIndex(t => t.toLowerCase() === hubAsset.hubAsset.toLowerCase());
-    invariant(
+    bridgeInvariant(
       tokenIndex !== -1,
       `Token ${hubAsset.hubAsset} not found in the vault reserves for chain ${token.chainKey}`,
+      { srcChainKey: token.chainKey, field: 'token' },
     );
     return reserves.balances[tokenIndex] ?? 0n;
   }

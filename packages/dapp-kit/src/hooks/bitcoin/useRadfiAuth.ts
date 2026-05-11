@@ -1,5 +1,5 @@
 // packages/dapp-kit/src/hooks/bitcoin/useRadfiAuth.ts
-import type { IBitcoinWalletProvider } from '@sodax/sdk';
+import { RadfiApiError, type IBitcoinWalletProvider } from '@sodax/sdk';
 import { useSodaxContext } from '../shared/useSodaxContext.js';
 import type { MutationHookParams } from '../shared/types.js';
 import { useSafeMutation, type SafeUseMutationResult } from '../shared/useSafeMutation.js';
@@ -61,7 +61,7 @@ export function useRadfiAuth({
     mutationKey: ['bitcoin', 'radfiAuth'],
     ...mutationOptions,
     mutationFn: async ({ walletProvider }) => {
-      const radfi = sodax.spokeService.bitcoinSpokeService.radfi;
+      const radfi = sodax.spoke.bitcoin.radfi;
       const walletAddress = await walletProvider.getWalletAddress();
       const existingSession = loadRadfiSession(walletAddress);
       const cachedPublicKey = existingSession?.publicKey;
@@ -74,8 +74,7 @@ export function useRadfiAuth({
         saveRadfiSession(walletAddress, { accessToken, refreshToken, tradingAddress, publicKey });
         return { accessToken, refreshToken, tradingAddress };
       } catch (err: unknown) {
-        const isAlreadyRegistered =
-          err instanceof Error && (err.message.includes('duplicatedPubKey') || err.message.includes('4008'));
+        const isAlreadyRegistered = err instanceof RadfiApiError && err.code === '4008';
 
         if (isAlreadyRegistered && existingSession?.refreshToken) {
           try {

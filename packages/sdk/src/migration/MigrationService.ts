@@ -1,4 +1,19 @@
-import invariant from 'tiny-invariant';
+import { SodaxError } from '../errors/SodaxError.js';
+import { mapRelayFailure } from '../errors/relay-error-mapping.js';
+import {  verifyFailed, intentCreationFailed, executionFailed, approveFailed, allowanceCheckFailed } from '../errors/wrappers.js';
+import {
+  type MigrateOrchestrationError,
+  type MigrationAllowanceCheckError,
+  type MigrationApproveError,
+  type MigrationCreateIntentError,
+  type RevertMigrationOrchestrationError,
+  isMigrateOrchestrationError,
+  isMigrationAllowanceCheckError,
+  isMigrationApproveError,
+  isMigrationCreateIntentError,
+  isRevertMigrationOrchestrationError,
+  migrationInvariant,
+} from './errors.js';
 import {
   IcxMigrationService,
   type IcxMigrateParams,
@@ -109,14 +124,14 @@ export class MigrationService {
   readonly config: ConfigService;
   readonly spoke: SpokeService;
 
-  constructor({ hubProvider, config, spoke: spokeService }: MigrationServiceConstructorParams) {
+  constructor({ hubProvider, config, spoke }: MigrationServiceConstructorParams) {
     this.hubProvider = hubProvider;
     this.icxMigration = new IcxMigrationService({ hubProvider, config });
     this.bnUSDMigrationService = new BnUSDMigrationService({ hubProvider, config });
     this.balnSwapService = new BalnSwapService({ hubProvider });
     this.relayerApiEndpoint = config.relay.relayerApiEndpoint;
     this.config = config;
-    this.spoke = spokeService;
+    this.spoke = spoke;
   }
 
   /**
@@ -134,31 +149,41 @@ export class MigrationService {
   public async isAllowanceValid<K extends SpokeChainKey>(
     params: MigrationParams<K> | MigrationRevertParams<K>,
     action: MigrationAction,
-  ): Promise<Result<boolean>> {
+  ): Promise<Result<boolean, MigrationAllowanceCheckError>> {
+    const baseCtx = { srcChainKey: params.srcChainKey };
     try {
+      migrationInvariant(action === 'migrate' || action === 'revert', 'Invalid action', { ...baseCtx, field: 'action' });
+      migrationInvariant(params.amount > 0n, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+
+      // Compute the underlying Result<boolean> across action × chain-type branches, then wrap any
+      // spoke-layer failure as MIGRATION_ALLOWANCE_CHECK_FAILED at the single return point below.
+      let inner: Result<boolean> = { ok: true, value: true };
+
       if (action === 'migrate') {
-        invariant(params.amount > 0n, 'Amount must be greater than 0');
-        invariant(isAddress(params.dstAddress) || isIconAddress(params.dstAddress), 'To address is required');
-        invariant(
+        migrationInvariant(
+          isAddress(params.dstAddress) || isIconAddress(params.dstAddress),
+          'To address is required',
+          { ...baseCtx, field: 'dstAddress' },
+        );
+        migrationInvariant(
           isIcxMigrateParams(params) || isBalnMigrateParams(params) || isUnifiedBnUSDMigrateParams(params),
           'Invalid params',
+          { ...baseCtx, field: 'params' },
         );
 
         if (isIconChainKeyType(params.srcChainKey) && (isIcxMigrateParams(params) || isBalnMigrateParams(params))) {
-          // icx and baln migration does not require allowance check since they originate from icon, thus just return true
-          return {
-            ok: true,
-            value: true,
-          };
+          // ICX and BALN migrations originate on ICON and do not require an allowance check.
+          return { ok: true, value: true };
         }
 
-        // bnUSD only requires allowance check for EVM spoke chains
         if (isUnifiedBnUSDMigrateParams(params) && isEvmChainKeyType(params.srcChainKey)) {
           const bnUSDTokenAddress = this.config.getChainConfig(params.srcChainKey).supportedTokens.bnUSD?.address ?? '';
+          migrationInvariant(isAddress(bnUSDTokenAddress), `bnUSD token not found for chain key: ${params.srcChainKey}`, {
+            ...baseCtx,
+            field: 'bnUSDTokenAddress',
+          });
 
-          invariant(isAddress(bnUSDTokenAddress), `bnUSD token not found for chain key: ${params.srcChainKey}`);
-
-          return await this.spoke.isAllowanceValid({
+          inner = await this.spoke.isAllowanceValid({
             srcChainKey: params.srcChainKey,
             token: params.srcbnUSD,
             amount: params.amount,
@@ -167,54 +192,46 @@ export class MigrationService {
               ? bnUSDTokenAddress
               : this.config.getChainConfig(params.srcChainKey).addresses.assetManager,
           });
-        }
-
-        if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
-          return await this.spoke.isAllowanceValid({
+        } else if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
+          inner = await this.spoke.isAllowanceValid({
             srcChainKey: params.srcChainKey,
             token: params.srcbnUSD,
             amount: params.amount,
             owner: params.srcAddress,
           } satisfies SpokeIsAllowanceValidParamsStellar);
         }
-
-        return {
-          ok: true,
-          value: true,
-        };
-      }
-      if (action === 'revert') {
-        invariant(params.amount > 0n, 'Amount must be greater than 0');
-        invariant(params.dstAddress.length > 0, 'To address is required');
-        invariant(isIcxCreateRevertMigrationParams(params) || isUnifiedBnUSDMigrateParams(params), 'Invalid params');
+        // Other action='migrate' chain types fall through with the default `inner = { ok: true, value: true }`.
+      } else {
+        // action === 'revert'
+        migrationInvariant(params.dstAddress.length > 0, 'To address is required', { ...baseCtx, field: 'dstAddress' });
+        migrationInvariant(
+          isIcxCreateRevertMigrationParams(params) || isUnifiedBnUSDMigrateParams(params),
+          'Invalid params',
+          { ...baseCtx, field: 'params' },
+        );
 
         if (isUnifiedBnUSDMigrateParams(params) && isEvmChainKeyType(params.srcChainKey)) {
           const spender: Address = isHubChainKeyType(params.srcChainKey)
             ? await this.hubProvider.getUserRouter(params.srcAddress as Address)
             : this.config.getChainConfig(params.srcChainKey).addresses.assetManager;
 
-          return await this.spoke.isAllowanceValid({
+          inner = await this.spoke.isAllowanceValid({
             srcChainKey: params.srcChainKey,
             token: params.srcbnUSD,
             amount: params.amount,
             owner: params.srcAddress,
             spender,
           } satisfies SpokeIsAllowanceValidParams<EvmChainKey>);
-        }
-
-        if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
-          return await this.spoke.isAllowanceValid({
+        } else if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
+          inner = await this.spoke.isAllowanceValid({
             srcChainKey: params.srcChainKey,
             token: params.srcbnUSD,
             amount: params.amount,
             owner: params.srcAddress,
           } satisfies SpokeIsAllowanceValidParamsStellar);
-        }
-
-        if (isHubChainKeyType(params.srcChainKey) && isIcxCreateRevertMigrationParams(params)) {
+        } else if (isHubChainKeyType(params.srcChainKey) && isIcxCreateRevertMigrationParams(params)) {
           const userRouter = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
-
-          return await this.spoke.isAllowanceValid({
+          inner = await this.spoke.isAllowanceValid({
             srcChainKey: params.srcChainKey,
             token: this.hubProvider.chainConfig.addresses.sodaToken,
             amount: params.amount,
@@ -224,14 +241,16 @@ export class MigrationService {
         }
       }
 
+      if (inner.ok) return inner;
       return {
         ok: false,
-        error: new Error('Invalid action'),
+        error: allowanceCheckFailed('migration', inner.error, baseCtx),
       };
     } catch (error) {
+      if (isMigrationAllowanceCheckError(error)) return { ok: false, error };
       return {
         ok: false,
-        error: error,
+        error: allowanceCheckFailed('migration', error, baseCtx),
       };
     }
   }
@@ -252,23 +271,30 @@ export class MigrationService {
   public async approve<K extends SpokeChainKey, Raw extends boolean>(
     _params: IcxRevertMigrationAction<Raw> | UnifiedBnUSDMigrateAction<K, Raw>,
     action: MigrationAction,
-  ): Promise<Result<TxReturnType<K, Raw>>> {
+  ): Promise<Result<TxReturnType<K, Raw>, MigrationApproveError>> {
     const { params } = _params;
-    try {
-      if (action === 'migrate') {
-        invariant(params.amount > 0n, 'Amount must be greater than 0');
-        invariant(params.dstAddress.length > 0, 'To address is required');
-        invariant(isUnifiedBnUSDMigrateParams(params), 'Invalid params');
+    const baseCtx = { srcChainKey: params.srcChainKey };
 
-        if (isUnifiedBnUSDMigrateParams(params) && isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
-          invariant(
+    const wrapApproveFailure = (cause: unknown) => approveFailed('migration', cause, baseCtx);
+
+    try {
+      migrationInvariant(action === 'migrate' || action === 'revert', 'Invalid action', { ...baseCtx, field: 'action' });
+      migrationInvariant(params.amount > 0n, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+      migrationInvariant(params.dstAddress.length > 0, 'To address is required', { ...baseCtx, field: 'dstAddress' });
+
+      if (action === 'migrate') {
+        migrationInvariant(isUnifiedBnUSDMigrateParams(params), 'Invalid params', { ...baseCtx, field: 'params' });
+
+        if (isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
+          migrationInvariant(
             isOptionalEvmWalletProviderType(_params.walletProvider),
             'Invalid wallet provider. Expected Evm wallet provider.',
+            { ...baseCtx, field: 'walletProvider' },
           );
 
           const srcChainKey = params.srcChainKey as EvmSpokeOnlyChainKey;
           const coreParams = {
-            srcChainKey: srcChainKey, // required type assertion to avoid type error
+            srcChainKey: srcChainKey,
             token: params.srcbnUSD as GetTokenAddressType<EvmSpokeOnlyChainKey>,
             amount: params.amount,
             owner: params.srcAddress as GetAddressType<EvmSpokeOnlyChainKey>,
@@ -288,7 +314,7 @@ export class MigrationService {
 
           const result = await this.spoke.approve<EvmSpokeOnlyChainKey, boolean>(approveParams);
 
-          if (!result.ok) return result;
+          if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
 
           return {
             ok: true,
@@ -296,10 +322,11 @@ export class MigrationService {
           };
         }
 
-        if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
-          invariant(
+        if (isStellarChainKeyType(params.srcChainKey)) {
+          migrationInvariant(
             isOptionalStellarWalletProviderType(_params.walletProvider),
             'Invalid wallet provider. Expected Stellar wallet provider.',
+            { ...baseCtx, field: 'walletProvider' },
           );
 
           const coreParams = {
@@ -311,18 +338,11 @@ export class MigrationService {
 
           const result = await this.spoke.approve<StellarChainKey, boolean>(
             _params.raw
-              ? {
-                  ...coreParams,
-                  raw: true,
-                }
-              : {
-                  ...coreParams,
-                  raw: false,
-                  walletProvider: _params.walletProvider,
-                },
+              ? { ...coreParams, raw: true }
+              : { ...coreParams, raw: false, walletProvider: _params.walletProvider },
           );
 
-          if (!result.ok) return result;
+          if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
 
           return {
             ok: true,
@@ -330,141 +350,128 @@ export class MigrationService {
           };
         }
 
-        return {
-          ok: false,
-          error: new Error('Invalid params for migrate action'),
-        };
+        // Reached when params is bnUSD-shaped but srcChainKey is neither EVM-spoke nor Stellar.
+        migrationInvariant(false, 'Invalid params for migrate action', { ...baseCtx, field: 'srcChainKey' });
       }
-      if (action === 'revert') {
-        invariant(params.amount > 0n, 'Amount must be greater than 0');
-        invariant(params.dstAddress.length > 0, 'To address is required');
-        invariant(isIcxCreateRevertMigrationParams(params) || isUnifiedBnUSDMigrateParams(params), 'Invalid params');
 
-        if (isUnifiedBnUSDMigrateParams(params) && isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
-          invariant(
-            isOptionalEvmWalletProviderType(_params.walletProvider),
-            'Invalid wallet provider. Expected Evm wallet provider.',
-          );
+      // action === 'revert'
+      migrationInvariant(
+        isIcxCreateRevertMigrationParams(params) || isUnifiedBnUSDMigrateParams(params),
+        'Invalid params',
+        { ...baseCtx, field: 'params' },
+      );
 
-          const spender: Address = isHubChainKeyType(params.srcChainKey)
-            ? await this.hubProvider.getUserRouter(params.srcAddress as Address)
-            : this.config.getChainConfig(params.srcChainKey).addresses.assetManager;
+      if (isUnifiedBnUSDMigrateParams(params) && isEvmSpokeOnlyChainKeyType(params.srcChainKey)) {
+        migrationInvariant(
+          isOptionalEvmWalletProviderType(_params.walletProvider),
+          'Invalid wallet provider. Expected Evm wallet provider.',
+          { ...baseCtx, field: 'walletProvider' },
+        );
 
-          const srcChainKey = params.srcChainKey as EvmSpokeOnlyChainKey;
-          const coreParams = {
-            srcChainKey: srcChainKey,
-            token: params.srcbnUSD as GetTokenAddressType<EvmChainKey>,
-            amount: params.amount,
-            owner: params.srcAddress as GetAddressType<EvmChainKey>,
-            spender,
-          } as const;
+        const spender: Address = isHubChainKeyType(params.srcChainKey)
+          ? await this.hubProvider.getUserRouter(params.srcAddress as Address)
+          : this.config.getChainConfig(params.srcChainKey).addresses.assetManager;
 
-          const approveParams = _params.raw
-            ? ({
-                ...coreParams,
-                raw: true,
-              } satisfies SpokeApproveParams<EvmSpokeOnlyChainKey, true>)
-            : ({
-                ...coreParams,
-                raw: false,
-                walletProvider: _params.walletProvider,
-              } satisfies SpokeApproveParams<EvmSpokeOnlyChainKey, false>);
+        const srcChainKey = params.srcChainKey as EvmSpokeOnlyChainKey;
+        const coreParams = {
+          srcChainKey: srcChainKey,
+          token: params.srcbnUSD as GetTokenAddressType<EvmChainKey>,
+          amount: params.amount,
+          owner: params.srcAddress as GetAddressType<EvmChainKey>,
+          spender,
+        } as const;
 
-          const result = await this.spoke.approve<EvmSpokeOnlyChainKey, boolean>(approveParams);
+        const approveParams = _params.raw
+          ? ({
+              ...coreParams,
+              raw: true,
+            } satisfies SpokeApproveParams<EvmSpokeOnlyChainKey, true>)
+          : ({
+              ...coreParams,
+              raw: false,
+              walletProvider: _params.walletProvider,
+            } satisfies SpokeApproveParams<EvmSpokeOnlyChainKey, false>);
 
-          if (!result.ok) return result;
+        const result = await this.spoke.approve<EvmSpokeOnlyChainKey, boolean>(approveParams);
 
-          return {
-            ok: true,
-            value: result.value satisfies TxReturnType<EvmSpokeOnlyChainKey, boolean> as TxReturnType<K, Raw>,
-          };
-        }
-
-        if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
-          invariant(
-            isOptionalStellarWalletProviderType(_params.walletProvider),
-            'Invalid wallet provider. Expected Stellar wallet provider.',
-          );
-
-          const coreParams = {
-            srcChainKey: params.srcChainKey,
-            token: params.srcbnUSD,
-            amount: params.amount,
-            owner: params.srcAddress as GetAddressType<StellarChainKey>,
-          } as const;
-
-          const result = await this.spoke.approve<StellarChainKey, boolean>(
-            _params.raw
-              ? {
-                  ...coreParams,
-                  raw: true,
-                }
-              : {
-                  ...coreParams,
-                  raw: false,
-                  walletProvider: _params.walletProvider,
-                },
-          );
-
-          if (!result.ok) return result;
-
-          return {
-            ok: true,
-            value: result.value satisfies TxReturnType<StellarChainKey, boolean> as TxReturnType<K, Raw>,
-          };
-        }
-
-        if (isHubChainKeyType(params.srcChainKey) && isIcxCreateRevertMigrationParams(params)) {
-          invariant(
-            isOptionalEvmWalletProviderType(_params.walletProvider),
-            'Invalid wallet provider. Expected Evm wallet provider.',
-          );
-          const userRouter = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
-
-          const coreParams = {
-            srcChainKey: params.srcChainKey,
-            token: this.hubProvider.chainConfig.addresses.sodaToken,
-            amount: params.amount,
-            owner: params.srcAddress,
-            spender: userRouter,
-          } as const;
-
-          const approveParams = _params.raw
-            ? ({
-                ...coreParams,
-                raw: true,
-              } satisfies SpokeApproveParams<HubChainKey, true>)
-            : ({
-                ...coreParams,
-                raw: false,
-                walletProvider: _params.walletProvider,
-              } satisfies SpokeApproveParams<HubChainKey, false>);
-
-          const result = await this.spoke.approve<HubChainKey, boolean>(approveParams);
-
-          if (!result.ok) return result;
-
-          return {
-            ok: true,
-            value: result.value satisfies TxReturnType<EvmSpokeOnlyChainKey, boolean> as TxReturnType<K, Raw>,
-          };
-        }
+        if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
 
         return {
-          ok: false,
-          error: new Error('Invalid params or chain type for revert action'),
+          ok: true,
+          value: result.value satisfies TxReturnType<EvmSpokeOnlyChainKey, boolean> as TxReturnType<K, Raw>,
         };
       }
 
-      return {
-        ok: false,
-        error: new Error('Invalid action'),
-      };
+      if (isUnifiedBnUSDMigrateParams(params) && isStellarChainKeyType(params.srcChainKey)) {
+        migrationInvariant(
+          isOptionalStellarWalletProviderType(_params.walletProvider),
+          'Invalid wallet provider. Expected Stellar wallet provider.',
+          { ...baseCtx, field: 'walletProvider' },
+        );
+
+        const coreParams = {
+          srcChainKey: params.srcChainKey,
+          token: params.srcbnUSD,
+          amount: params.amount,
+          owner: params.srcAddress as GetAddressType<StellarChainKey>,
+        } as const;
+
+        const result = await this.spoke.approve<StellarChainKey, boolean>(
+          _params.raw
+            ? { ...coreParams, raw: true }
+            : { ...coreParams, raw: false, walletProvider: _params.walletProvider },
+        );
+
+        if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
+
+        return {
+          ok: true,
+          value: result.value satisfies TxReturnType<StellarChainKey, boolean> as TxReturnType<K, Raw>,
+        };
+      }
+
+      if (isHubChainKeyType(params.srcChainKey) && isIcxCreateRevertMigrationParams(params)) {
+        migrationInvariant(
+          isOptionalEvmWalletProviderType(_params.walletProvider),
+          'Invalid wallet provider. Expected Evm wallet provider.',
+          { ...baseCtx, field: 'walletProvider' },
+        );
+        const userRouter = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
+
+        const coreParams = {
+          srcChainKey: params.srcChainKey,
+          token: this.hubProvider.chainConfig.addresses.sodaToken,
+          amount: params.amount,
+          owner: params.srcAddress,
+          spender: userRouter,
+        } as const;
+
+        const approveParams = _params.raw
+          ? ({
+              ...coreParams,
+              raw: true,
+            } satisfies SpokeApproveParams<HubChainKey, true>)
+          : ({
+              ...coreParams,
+              raw: false,
+              walletProvider: _params.walletProvider,
+            } satisfies SpokeApproveParams<HubChainKey, false>);
+
+        const result = await this.spoke.approve<HubChainKey, boolean>(approveParams);
+
+        if (!result.ok) return { ok: false, error: wrapApproveFailure(result.error) };
+
+        return {
+          ok: true,
+          value: result.value satisfies TxReturnType<EvmSpokeOnlyChainKey, boolean> as TxReturnType<K, Raw>,
+        };
+      }
+
+      // No matching revert path.
+      migrationInvariant(false, 'Invalid params or chain type for revert action', { ...baseCtx, field: 'srcChainKey' });
     } catch (error) {
-      return {
-        ok: false,
-        error: error,
-      };
+      if (isMigrationApproveError(error)) return { ok: false, error };
+      return { ok: false, error: wrapApproveFailure(error) };
     }
   }
 
@@ -506,17 +513,17 @@ export class MigrationService {
    */
   async migratebnUSD<K extends SpokeChainKey>(
     _params: UnifiedBnUSDMigrateAction<K, false>,
-  ): Promise<Result<TxHashPair>> {
+  ): Promise<Result<TxHashPair, MigrateOrchestrationError>> {
     const { params, timeout } = _params;
+    const baseCtx = {
+      srcChainKey: params.srcChainKey,
+      dstChainKey: params.dstChainKey,
+      action: 'migratebnUSD' as const,
+    };
     try {
       const intentResult = await this.createMigratebnUSDIntent(_params);
-
-      if (!intentResult.ok) {
-        return {
-          ok: false,
-          error: intentResult.error,
-        };
-      }
+      // CreateMigrateIntentErrorCode ⊂ MigrateOrchestrationErrorCode (subset narrowing).
+      if (!intentResult.ok) return { ok: false, error: intentResult.error };
 
       const { tx: spokeTxHash, relayData: extraData } = intentResult.value;
 
@@ -526,7 +533,12 @@ export class MigrationService {
         chainKey: params.srcChainKey,
       });
 
-      if (!verifyTxHashResult.ok) return verifyTxHashResult;
+      if (!verifyTxHashResult.ok) {
+        return {
+          ok: false,
+          error: verifyFailed('migration', verifyTxHashResult.error, baseCtx),
+        };
+      }
 
       const packetResult = await relayTxAndWaitPacket({
         srcTxHash: spokeTxHash,
@@ -537,23 +549,47 @@ export class MigrationService {
       });
 
       if (!packetResult.ok) {
-        return packetResult;
+        return {
+          ok: false,
+          error: mapRelayFailure(packetResult.error, {
+            feature: 'migration',
+            action: baseCtx.action,
+            srcChainKey: baseCtx.srcChainKey,
+            dstChainKey: baseCtx.dstChainKey,
+          }),
+        };
       }
 
+      // Secondary destination-spoke watcher — fires when bnUSD's destination is not Sonic
+      // (i.e. when the hub leg additionally bridges out to another spoke). Failures here are
+      // wrapped with phase='destinationExecution' to distinguish from primary-relay failures.
       if (!(params.srcChainKey === ChainKeys.SONIC_MAINNET || params.dstChainKey === ChainKeys.SONIC_MAINNET)) {
-        await waitUntilIntentExecuted({
+        const execResult = await waitUntilIntentExecuted({
           intentRelayChainId: getIntentRelayChainId(ChainKeys.SONIC_MAINNET).toString(),
           srcTxHash: packetResult.value.dst_tx_hash,
           timeout: timeout,
           apiUrl: this.relayerApiEndpoint,
         });
+        if (!execResult.ok) {
+          return {
+            ok: false,
+            error: mapRelayFailure(execResult.error, {
+              feature: 'migration',
+              action: baseCtx.action,
+              srcChainKey: baseCtx.srcChainKey,
+              dstChainKey: baseCtx.dstChainKey,
+              phase: 'destinationExecution',
+            }),
+          };
+        }
       }
 
       return { ok: true, value: { srcChainTxHash: spokeTxHash, dstChainTxHash: packetResult.value.dst_tx_hash } };
     } catch (error) {
+      if (isMigrateOrchestrationError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: executionFailed('migration', error, baseCtx),
       };
     }
   }
@@ -570,11 +606,13 @@ export class MigrationService {
    * @returns `{ srcChainTxHash, dstChainTxHash }` on success; an error result if the liquidity
    *   check fails, the deposit reverts, or the relay times out.
    */
-  async migrateIcxToSoda(_params: IcxMigrateAction<false>): Promise<Result<TxHashPair>> {
+  async migrateIcxToSoda(_params: IcxMigrateAction<false>): Promise<Result<TxHashPair, MigrateOrchestrationError>> {
     const { timeout } = _params;
+    const baseCtx = { srcChainKey: _params.params.srcChainKey, action: 'migrateIcxToSoda' as const };
     try {
       const txResult = await this.createMigrateIcxToSodaIntent(_params);
-      if (!txResult.ok) return txResult;
+      // CreateMigrateIntentErrorCode ⊂ MigrateOrchestrationErrorCode.
+      if (!txResult.ok) return { ok: false, error: txResult.error };
 
       const { tx, relayData } = txResult.value;
 
@@ -587,14 +625,15 @@ export class MigrationService {
       });
 
       if (!packetResult.ok) {
-        return packetResult;
+        return { ok: false, error: mapRelayFailure(packetResult.error, { feature: 'migration', action: baseCtx.action, srcChainKey: baseCtx.srcChainKey }) };
       }
 
       return { ok: true, value: { srcChainTxHash: tx, dstChainTxHash: packetResult.value.dst_tx_hash } };
     } catch (error) {
+      if (isMigrateOrchestrationError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: executionFailed('migration', error, baseCtx),
       };
     }
   }
@@ -614,14 +653,15 @@ export class MigrationService {
    * @returns `{ srcChainTxHash, dstChainTxHash }` on success, where `srcChainTxHash` is the
    *   Sonic deposit transaction and `dstChainTxHash` is the hub-side packet receipt.
    */
-  async revertMigrateSodaToIcx(_params: IcxRevertMigrationAction<false>): Promise<Result<TxHashPair>> {
+  async revertMigrateSodaToIcx(
+    _params: IcxRevertMigrationAction<false>,
+  ): Promise<Result<TxHashPair, RevertMigrationOrchestrationError>> {
     const { timeout } = _params;
+    const baseCtx = { srcChainKey: ChainKeys.SONIC_MAINNET, action: 'revertMigrateSodaToIcx' as const };
     try {
       const txResult = await this.createRevertSodaToIcxMigrationIntent(_params);
-
-      if (!txResult.ok) {
-        return txResult;
-      }
+      // CreateRevertMigrationIntentErrorCode ⊂ RevertMigrationOrchestrationErrorCode.
+      if (!txResult.ok) return { ok: false, error: txResult.error };
 
       const { tx, relayData } = txResult.value;
 
@@ -634,14 +674,15 @@ export class MigrationService {
       });
 
       if (!packetResult.ok) {
-        return packetResult;
+        return { ok: false, error: mapRelayFailure(packetResult.error, { feature: 'migration', action: baseCtx.action, srcChainKey: baseCtx.srcChainKey }) };
       }
 
       return { ok: true, value: { srcChainTxHash: tx, dstChainTxHash: packetResult.value.dst_tx_hash } };
     } catch (error) {
+      if (isRevertMigrationOrchestrationError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: executionFailed('migration', error, baseCtx),
       };
     }
   }
@@ -660,12 +701,13 @@ export class MigrationService {
    * @returns `{ srcChainTxHash, dstChainTxHash }` on success, where `srcChainTxHash` is the
    *   ICON deposit transaction and `dstChainTxHash` is the hub-side packet receipt.
    */
-  async migrateBaln(_params: BalnMigrateAction<false>): Promise<Result<TxHashPair>> {
+  async migrateBaln(_params: BalnMigrateAction<false>): Promise<Result<TxHashPair, MigrateOrchestrationError>> {
     const { timeout } = _params;
+    const baseCtx = { srcChainKey: ChainKeys.ICON_MAINNET, action: 'migrateBaln' as const };
     try {
       const txResult = await this.createMigrateBalnIntent(_params);
-
-      if (!txResult.ok) return txResult;
+      // CreateMigrateIntentErrorCode ⊂ MigrateOrchestrationErrorCode.
+      if (!txResult.ok) return { ok: false, error: txResult.error };
 
       const { tx, relayData } = txResult.value;
 
@@ -678,14 +720,15 @@ export class MigrationService {
       });
 
       if (!packetResult.ok) {
-        return packetResult;
+        return { ok: false, error: mapRelayFailure(packetResult.error, { feature: 'migration', action: baseCtx.action, srcChainKey: baseCtx.srcChainKey }) };
       }
 
       return { ok: true, value: { srcChainTxHash: tx, dstChainTxHash: packetResult.value.dst_tx_hash } };
     } catch (error) {
+      if (isMigrateOrchestrationError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: executionFailed('migration', error, baseCtx),
       };
     }
   }
@@ -705,12 +748,13 @@ export class MigrationService {
    */
   async createMigrateBalnIntent<Raw extends boolean>(
     _params: BalnMigrateAction<Raw>,
-  ): Promise<Result<IntentTxResult<IconChainKey, Raw>>> {
+  ): Promise<Result<IntentTxResult<IconChainKey, Raw>, MigrationCreateIntentError>> {
     const { params, skipSimulation } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey, action: 'migrateBaln' as const };
 
     try {
       const balnXToken = this.config.getChainConfig(params.srcChainKey).supportedTokens['BALN'];
-      invariant(balnXToken, 'BALN token not found');
+      migrationInvariant(balnXToken, 'BALN token not found', { ...baseCtx, field: 'balnXToken' });
       const balnToken = balnXToken.address as IconContractAddress;
 
       const migrationData = this.balnSwapService.swapData(balnToken, params, this.config);
@@ -740,7 +784,13 @@ export class MigrationService {
             },
       );
 
-      if (!txResult.ok) return txResult;
+      if (!txResult.ok) {
+        if (isMigrationCreateIntentError(txResult.error)) return { ok: false, error: txResult.error };
+        return {
+          ok: false,
+          error: intentCreationFailed('migration', txResult.error, baseCtx),
+        };
+      }
 
       return {
         ok: true,
@@ -750,9 +800,10 @@ export class MigrationService {
         },
       };
     } catch (error) {
+      if (isMigrationCreateIntentError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: intentCreationFailed('migration', error, baseCtx),
       };
     }
   }
@@ -776,33 +827,58 @@ export class MigrationService {
    */
   async createMigratebnUSDIntent<K extends SpokeChainKey, Raw extends boolean>(
     _params: UnifiedBnUSDMigrateAction<K, Raw>,
-  ): Promise<Result<IntentTxResult<K, Raw>>> {
+  ): Promise<Result<IntentTxResult<K, Raw>, MigrationCreateIntentError>> {
     const { params, unchecked, skipSimulation } = _params;
+    const baseCtx = {
+      srcChainKey: params.srcChainKey,
+      dstChainKey: params.dstChainKey,
+      action: 'migratebnUSD' as const,
+    };
     try {
       if (!unchecked) {
-        invariant(this.config.isValidSpokeChainKey(params.srcChainKey), 'Invalid spoke source chain key');
-        invariant(this.config.isValidSpokeChainKey(params.dstChainKey), 'Invalid spoke destination chain key');
-        invariant(params.srcbnUSD.length > 0, 'Legacy bnUSD token address is required');
-        invariant(params.dstbnUSD.length > 0, 'New bnUSD token address is required');
-        invariant(params.amount > 0, 'Amount must be greater than 0');
-        invariant(params.dstAddress.length > 0, 'Recipient address is required');
-        invariant(
+        migrationInvariant(this.config.isValidSpokeChainKey(params.srcChainKey), 'Invalid spoke source chain key', {
+          ...baseCtx,
+          field: 'srcChainKey',
+        });
+        migrationInvariant(this.config.isValidSpokeChainKey(params.dstChainKey), 'Invalid spoke destination chain key', {
+          ...baseCtx,
+          field: 'dstChainKey',
+        });
+        migrationInvariant(params.srcbnUSD.length > 0, 'Legacy bnUSD token address is required', {
+          ...baseCtx,
+          field: 'srcbnUSD',
+        });
+        migrationInvariant(params.dstbnUSD.length > 0, 'New bnUSD token address is required', {
+          ...baseCtx,
+          field: 'dstbnUSD',
+        });
+        migrationInvariant(params.amount > 0, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+        migrationInvariant(params.dstAddress.length > 0, 'Recipient address is required', {
+          ...baseCtx,
+          field: 'dstAddress',
+        });
+        migrationInvariant(
           !(isLegacybnUSDToken(params.srcbnUSD) && isLegacybnUSDToken(params.dstbnUSD)),
           'srcbnUSD and dstbnUSD cannot both be legacy bnUSD tokens',
+          { ...baseCtx, field: 'tokens' },
         );
       }
 
       let migrationData: Hex;
+      let direction: 'forward' | 'reverse';
       if (isLegacybnUSDToken(params.srcbnUSD)) {
         // migration from legacy bnUSD to new bnUSD
+        direction = 'forward';
         if (!unchecked) {
-          invariant(
+          migrationInvariant(
             isLegacybnUSDChainId(params.srcChainKey),
             'srcChainKey must be a legacy bnUSD chain (icon, sui, stellar) if srcbnUSD is a legacy bnUSD token',
+            { ...baseCtx, direction, field: 'srcChainKey' },
           );
-          invariant(
+          migrationInvariant(
             isNewbnUSDChainId(params.dstChainKey),
             'dstChainKey must be a new bnUSD chain (all spoke chains besides Icon) if dstbnUSD is a legacy bnUSD token',
+            { ...baseCtx, direction, field: 'dstChainKey' },
           );
         }
 
@@ -816,18 +892,22 @@ export class MigrationService {
         });
       } else if (isLegacybnUSDToken(params.dstbnUSD)) {
         // reverse migration from new bnUSD to legacy bnUSD
+        direction = 'reverse';
         if (!unchecked) {
-          invariant(
+          migrationInvariant(
             isLegacybnUSDChainId(params.dstChainKey),
             'dstChainKey must be a legacy bnUSD chain (sui, stellar, icon) if dstbnUSD is a legacy bnUSD token',
+            { ...baseCtx, direction, field: 'dstChainKey' },
           );
-          invariant(
+          migrationInvariant(
             isNewbnUSDToken(params.srcbnUSD),
             'srcbnUSD must be a new bnUSD token if dstbnUSD is a legacy bnUSD token',
+            { ...baseCtx, direction, field: 'srcbnUSD' },
           );
-          invariant(
+          migrationInvariant(
             isNewbnUSDChainId(params.srcChainKey),
             'srcChainKey must be a new bnUSD chain (all spoke chains besides Icon) if srcbnUSD is a new bnUSD token',
+            { ...baseCtx, direction, field: 'srcChainKey' },
           );
         }
 
@@ -840,7 +920,12 @@ export class MigrationService {
           dstAddress: encodeAddress(params.dstChainKey, params.dstAddress),
         });
       } else {
-        throw new Error('srcbnUSD or dstbnUSD must be a legacy bnUSD token');
+        // Neither token is legacy — surface as a typed validation failure (mirrors the other
+        // precondition-style checks above).
+        migrationInvariant(false, 'srcbnUSD or dstbnUSD must be a legacy bnUSD token', {
+          ...baseCtx,
+          field: 'tokens',
+        });
       }
 
       const hubWalletAddress = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, params.srcChainKey);
@@ -868,7 +953,13 @@ export class MigrationService {
             },
       );
 
-      if (!txResult.ok) return txResult;
+      if (!txResult.ok) {
+        if (isMigrationCreateIntentError(txResult.error)) return { ok: false, error: txResult.error };
+        return {
+          ok: false,
+          error: intentCreationFailed('migration', txResult.error, { ...baseCtx, direction }),
+        };
+      }
 
       return {
         ok: true,
@@ -878,9 +969,10 @@ export class MigrationService {
         },
       };
     } catch (error) {
+      if (isMigrationCreateIntentError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: intentCreationFailed('migration', error, baseCtx),
       };
     }
   }
@@ -904,28 +996,45 @@ export class MigrationService {
    */
   async createMigrateIcxToSodaIntent<Raw extends boolean>(
     _params: IcxMigrateAction<Raw>,
-  ): Promise<Result<IntentTxResult<IconChainKey, Raw>>> {
+  ): Promise<Result<IntentTxResult<IconChainKey, Raw>, MigrationCreateIntentError>> {
     const { params, skipSimulation } = _params;
+    const baseCtx = { srcChainKey: params.srcChainKey, action: 'migrateIcxToSoda' as const };
     try {
-      invariant(params.amount > 0, 'Amount must be greater than 0');
-      invariant(isAddress(params.dstAddress), 'Recipient address is required');
-      invariant(
+      migrationInvariant(params.amount > 0, 'Amount must be greater than 0', { ...baseCtx, field: 'amount' });
+      migrationInvariant(isAddress(params.dstAddress), 'Recipient address is required', {
+        ...baseCtx,
+        field: 'dstAddress',
+      });
+      migrationInvariant(
         params.address.toLowerCase() ===
           this.config.sodaxConfig.chains[ChainKeys.ICON_MAINNET].addresses.wICX.toLowerCase() ||
           params.address.toLowerCase() ===
             this.config.sodaxConfig.chains[ChainKeys.ICON_MAINNET].nativeToken.toLowerCase(),
         'Token must be wICX or native ICX token',
+        { ...baseCtx, field: 'address' },
       );
-      invariant(isIconChainKeyType(params.srcChainKey), 'Source chain key must be an Icon chain');
+      migrationInvariant(isIconChainKeyType(params.srcChainKey), 'Source chain key must be an Icon chain', {
+        ...baseCtx,
+        field: 'srcChainKey',
+      });
 
       const availableAmount = await this.icxMigration.getAvailableAmount();
-      if (!availableAmount.ok) return availableAmount;
-
-      if (availableAmount.value < params.amount) {
-        throw new Error(
-          `Insufficient liquidity. Available: ${availableAmount.value.toString()}, Requested: ${params.amount.toString()}`,
-        );
+      if (!availableAmount.ok) {
+        // Forward the typed lookup error as MIGRATION_INTENT_CREATION_FAILED with the original
+        // MigrationLookupError on `cause` (subset narrowing doesn't apply — Lookup ⊄ Create).
+        return {
+          ok: false,
+          error: new SodaxError('INTENT_CREATION_FAILED', 'Failed to read ICX migration liquidity', { feature: 'migration', cause: availableAmount.error,
+            context: { ...baseCtx, phase: 'intentCreation' },
+          }),
+        };
       }
+
+      migrationInvariant(
+        availableAmount.value >= params.amount,
+        `Insufficient liquidity. Available: ${availableAmount.value.toString()}, Requested: ${params.amount.toString()}`,
+        { ...baseCtx, field: 'amount', reason: 'insufficient liquidity' },
+      );
 
       const hubWalletAddress = await this.hubProvider.getUserHubWalletAddress(
         params.srcAddress,
@@ -955,7 +1064,13 @@ export class MigrationService {
             },
       );
 
-      if (!txResult.ok) return txResult;
+      if (!txResult.ok) {
+        if (isMigrationCreateIntentError(txResult.error)) return { ok: false, error: txResult.error };
+        return {
+          ok: false,
+          error: intentCreationFailed('migration', txResult.error, baseCtx),
+        };
+      }
 
       return {
         ok: true,
@@ -965,9 +1080,10 @@ export class MigrationService {
         },
       };
     } catch (error) {
+      if (isMigrationCreateIntentError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: intentCreationFailed('migration', error, baseCtx),
       };
     }
   }
@@ -992,12 +1108,13 @@ export class MigrationService {
    */
   async createRevertSodaToIcxMigrationIntent<Raw extends boolean>(
     _params: IcxRevertMigrationAction<Raw>,
-  ): Promise<Result<IntentTxResult<SonicChainKey, Raw>>> {
+  ): Promise<Result<IntentTxResult<SonicChainKey, Raw>, MigrationCreateIntentError>> {
     const { params, skipSimulation } = _params;
+    const baseCtx = { srcChainKey: ChainKeys.SONIC_MAINNET, action: 'revertMigrateSodaToIcx' as const };
     try {
       const userRouter = await this.hubProvider.getUserHubWalletAddress(params.srcAddress, ChainKeys.SONIC_MAINNET);
       const wICX = this.config.sodaxConfig.chains[ChainKeys.ICON_MAINNET].addresses.wICX;
-      invariant(wICX, 'wICX token not found');
+      migrationInvariant(wICX, 'wICX token not found', { ...baseCtx, field: 'wICX' });
       const data = this.icxMigration.revertMigration({
         wICX: wICX as IconAddress,
         amount: params.amount,
@@ -1028,7 +1145,13 @@ export class MigrationService {
             },
       );
 
-      if (!txResult.ok) return txResult;
+      if (!txResult.ok) {
+        if (isMigrationCreateIntentError(txResult.error)) return { ok: false, error: txResult.error };
+        return {
+          ok: false,
+          error: intentCreationFailed('migration', txResult.error, baseCtx),
+        };
+      }
 
       return {
         ok: true,
@@ -1038,9 +1161,10 @@ export class MigrationService {
         },
       };
     } catch (error) {
+      if (isMigrationCreateIntentError(error)) return { ok: false, error };
       return {
         ok: false,
-        error,
+        error: intentCreationFailed('migration', error, baseCtx),
       };
     }
   }

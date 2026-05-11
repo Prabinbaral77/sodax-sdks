@@ -22,14 +22,12 @@
   },
   "typesVersions": {
     "*": {
-      "xchains/*": [
-        "./dist/xchains/*/index.d.ts"
-      ]
+      "xchains/*": ["./dist/xchains/*/index.d.ts"]
     }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/icon-project/sodax-frontend"
+    "url": "https://github.com/icon-project/sodax-sdks"
   },
   "scripts": {
     "build": "NODE_OPTIONS=--max-old-space-size=8192 tsup",
@@ -56,6 +54,8 @@
     "@injectivelabs/wallet-cosmos": "catalog:",
     "@injectivelabs/wallet-evm": "catalog:",
     "@injectivelabs/wallet-strategy": "catalog:",
+    "@mysten/dapp-kit": "catalog:",
+    "@mysten/sui": "catalog:",
     "@provablehq/sdk": "catalog:",
     "@provablehq/aleo-wallet-adaptor-core": "catalog:",
     "@provablehq/aleo-wallet-adaptor-puzzle": "catalog:",
@@ -63,8 +63,6 @@
     "@provablehq/aleo-wallet-adaptor-leo": "catalog:",
     "@provablehq/aleo-types": "catalog:",
     "@provablehq/aleo-wallet-standard": "catalog:",
-    "@mysten/dapp-kit": "catalog:",
-    "@mysten/sui": "catalog:",
     "@provablehq/aleo-wallet-adaptor-react": "catalog:",
     "near-api-js": "catalog:",
     "@sodax/types": "workspace:*",

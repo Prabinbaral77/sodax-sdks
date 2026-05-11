@@ -19,19 +19,16 @@ const rpcConfig: RpcConfig = {
   [ChainKeys.ETHEREUM_MAINNET]: process.env.ETHEREUM_RPC_URL ?? 'https://ethereum-rpc.publicnode.com',
   [ChainKeys.HYPEREVM_MAINNET]: process.env.HYPEREVM_RPC_URL ?? 'https://rpc.hyperliquid.xyz/evm',
   [ChainKeys.SOLANA_MAINNET]:
-    process.env.SOLANA_RPC_URL ?? process.env.VITE_SOLANA_RPC_URL ?? 'https://solana-rpc.publicnode.com',
+    process.env.SOLANA_RPC_URL ?? 'https://solana-rpc.publicnode.com',
   [ChainKeys.STELLAR_MAINNET]: {
     horizonRpcUrl: process.env.STELLAR_HORIZON_RPC_URL ?? 'https://horizon.stellar.org',
-    sorobanRpcUrl:
-      process.env.STELLAR_SOROBAN_RPC_URL ??
-      'https://magical-bitter-frost.stellar-mainnet.quiknode.pro/78709b736890cf5a9bcb36e118b9d18e8ecdb7ee',
+    sorobanRpcUrl: process.env.STELLAR_SOROBAN_RPC_URL ?? 'https://rpc.ankr.com/stellar_soroban',
   },
   [ChainKeys.BITCOIN_MAINNET]: {
     radfiApiUrl: process.env.RADFI_API_URL ?? 'https://api.radfi.co/api',
     radfiUmsUrl: process.env.RADFI_UMS_URL ?? 'https://ums.radfi.co/api',
     rpcUrl: process.env.BITCOIN_RPC_URL ?? 'https://mempool.space/api',
   },
-  // aleo
   [ChainKeys.ALEO_MAINNET]: process.env.ALEO_RPC_URL ?? 'https://api.provable.com/v2',
 };
 
@@ -42,7 +39,7 @@ const configMap: Record<SolverEnv, SolverConfig> = {
 };
 
 export default function Providers({ children }: { children: ReactNode }) {
-  const solverEnvironment = useAppStore(state => state.solverEnvironment);
+  const { solverEnvironment } = useAppStore();
 
   const walletConfig = useMemo((): SodaxWalletConfig => {
     const wcProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;

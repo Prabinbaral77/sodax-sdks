@@ -3,7 +3,7 @@
  *
  * Mirrors the pattern from SwapService.test.ts (PR #1174):
  *   1. A single `new Sodax()` instance backs every test. Instance methods are exercised on
- *      `sodax.spokeService.sonicSpokeService`; the publicClient lives there and is spied per-test.
+ *      `sodax.spoke.sonic`; the publicClient lives there and is spied per-test.
  *   2. Static collaborators (`Erc20Service`, `EvmSolverService`, `randomUint256`) are mocked at
  *      their source paths via `vi.mock` + `vi.hoisted`, since SwapService-style barrel re-exports
  *      otherwise produce a different module instance than the test-side import.
@@ -15,20 +15,17 @@
  * NOTE: a suspected v1 regression in `getDeposit` is flagged inline — see that describe block.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  Address,
-  Hex,
-  IEvmWalletProvider,
-  PartnerFee,
-  SolverConfig,
-  SonicChainKey,
-  SpokeChainKey,
+import {
+  ChainKeys,
+  spokeChainConfig,
+  type Address,
+  type Hex,
+  type IEvmWalletProvider,
+  type PartnerFee,
+  type SolverConfig,
+  type SonicChainKey,
+  type SpokeChainKey,
 } from '@sodax/types';
-// `@sodax/types` is consumed from `dist/` in vitest. The generated dist entry is stale/missing
-// many runtime exports (ChainKeys, spokeChainConfig). Import them from source — same pragma the
-// SwapService test uses.
-import { ChainKeys } from '../../../../../types/src/chains/chain-keys.js';
-import { spokeChainConfig } from '../../../../../types/src/chains/chains.js';
 import { encodeAbiParameters, encodeFunctionData } from 'viem';
 import { wrappedSonicAbi, sonicWalletFactoryAbi } from '../../abis/index.js';
 
@@ -91,7 +88,7 @@ import type { DepositParams, SendMessageParams } from '../../types/spoke-types.j
 // --- fixtures -------------------------------------------------------------
 
 const sodax = new Sodax();
-const sonicSpoke = sodax.spokeService.sonicSpokeService;
+const sonicSpoke = sodax.spoke.sonic;
 
 // Helper: encode an empty calls tuple as the `data` field. SonicSpokeService.deposit and
 // .sendMessage both `decodeAbiParameters([{ type: 'tuple[]', components: [...] }], data)` to
@@ -190,6 +187,7 @@ describe('SonicSpokeService.isAllowanceValid', () => {
     expect(mocks.erc20IsAllowanceValid).toHaveBeenCalledWith({
       ...params,
       publicClient: sonicSpoke.publicClient,
+      nativeToken: SONIC_NATIVE,
     });
   });
 
@@ -480,7 +478,7 @@ describe('SonicSpokeService.deposit (static)', () => {
   describe('rejects on invalid inputs', () => {
     it('throws when srcChainKey is not a Sonic chain key (invariant)', async () => {
       await expect(
-        SonicSpokeService.deposit(
+        sonicSpoke.deposit(
           depositParams<true>({
             srcChainKey: ChainKeys.BSC_MAINNET as unknown as SonicChainKey,
             raw: true,
@@ -492,7 +490,7 @@ describe('SonicSpokeService.deposit (static)', () => {
 
   describe('native token branch', () => {
     it('prepends a wrap-native call and forwards `value: amount` when raw=true', async () => {
-      const result = await SonicSpokeService.deposit(
+      const result = await sonicSpoke.deposit(
         depositParams<true>({ token: SONIC_NATIVE, raw: true }),
       );
 
@@ -520,7 +518,7 @@ describe('SonicSpokeService.deposit (static)', () => {
 
     it('case-insensitive native check — UPPERCASE token still triggers the wrap path', async () => {
       const upperNative = SONIC_NATIVE.toUpperCase() as Address;
-      await SonicSpokeService.deposit(depositParams<true>({ token: upperNative, raw: true }));
+      await sonicSpoke.deposit(depositParams<true>({ token: upperNative, raw: true }));
 
       expect(mocks.erc20EncodeTransferFrom).not.toHaveBeenCalled();
     });
@@ -528,7 +526,7 @@ describe('SonicSpokeService.deposit (static)', () => {
 
   describe('ERC20 token branch', () => {
     it('prepends a transferFrom call and forwards `value: 0n` when raw=true', async () => {
-      const result = await SonicSpokeService.deposit(depositParams<true>({ raw: true }));
+      const result = await sonicSpoke.deposit(depositParams<true>({ raw: true }));
 
       expect(mocks.erc20EncodeTransferFrom).toHaveBeenCalledWith(ERC20_TOKEN, SRC_ADDR, HUB_WALLET, 1_000n);
       expect(result).toEqual({
@@ -572,7 +570,7 @@ describe('SonicSpokeService.deposit (static)', () => {
         [[{ address: extraCall.address, value: extraCall.value, data: extraCall.data }]],
       );
 
-      const result = await SonicSpokeService.deposit(
+      const result = await sonicSpoke.deposit(
         depositParams<true>({ raw: true, data: dataWithExtra }),
       );
 
@@ -596,7 +594,7 @@ describe('SonicSpokeService.deposit (static)', () => {
     it('raw=false delegates to walletProvider.sendTransaction and returns its hash', async () => {
       (mockEvmProvider.sendTransaction as ReturnType<typeof vi.fn>).mockResolvedValueOnce(TX_HASH);
 
-      const result = await SonicSpokeService.deposit(depositParams<false>({ raw: false }));
+      const result = await sonicSpoke.deposit(depositParams<false>({ raw: false }));
 
       expect(result).toBe(TX_HASH);
       expect(mockEvmProvider.sendTransaction).toHaveBeenCalledTimes(1);
@@ -607,7 +605,7 @@ describe('SonicSpokeService.deposit (static)', () => {
     });
 
     it('raw=true never calls walletProvider.sendTransaction', async () => {
-      await SonicSpokeService.deposit(depositParams<true>({ raw: true }));
+      await sonicSpoke.deposit(depositParams<true>({ raw: true }));
       expect(mockEvmProvider.sendTransaction).not.toHaveBeenCalled();
     });
   });

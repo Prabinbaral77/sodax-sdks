@@ -1,5 +1,7 @@
 # Staking Documentation
 
+> **Error handling conventions:** This module uses the **relay-layer contract** — discriminate on `error.message === 'RELAY_TIMEOUT'` / `'SUBMIT_TX_FAILED'` (also exported as `RELAY_ERROR_CODES` from `@sodax/sdk`). The **swap module** uses a different convention (`SodaxError<SwapErrorCode>` — see [SWAPS.md](./SWAPS.md) Error Handling). Both conventions coexist during the swap-first migration; the legacy pattern documented below is unchanged for Staking.
+
 The `StakingService` class, reachable through `sodax.staking`, provides functionality for staking SODA tokens,
 unstaking, claiming rewards, and retrieving staking information. It supports operations across all spoke chains
 with automatic hub chain integration.
@@ -132,7 +134,7 @@ const result = await sodax.staking.approve({
 
 For Stellar-based staking operations, `isAllowanceValid` and `approve` handle trustlines automatically
 when Stellar is the source chain. See
-[Stellar Trustline Requirements](https://github.com/icon-project/sodax-frontend/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#staking)
+[Stellar Trustline Requirements](https://github.com/icon-project/sodax-sdks/blob/main/packages/sdk/docs/STELLAR_TRUSTLINE.md#staking)
 for details.
 
 Staking operations always flow from spoke chains (including Stellar) to the hub chain (Sonic), so Stellar
@@ -796,37 +798,119 @@ type TxHashPair = {
 
 ## Error Handling
 
-All async public methods return `Promise<Result<T>>`:
+All async public methods on `StakingService` return `Promise<Result<T, SodaxError<NarrowCode>>>` where
+`NarrowCode` is a narrow per-method union of `StakingErrorCode`. Discriminate on `error.code`, never
+on `error.message`. The original lower-level failure (a viem revert, a fetch error, a relay timeout)
+is preserved on `error.cause`; structured metadata (chain, action, phase, relayCode) is on
+`error.context`.
 
 ```typescript
-type Result<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: Error | unknown };
-```
+import { isStakeError, type StakeError } from '@sodax/sdk';
 
-Typed error discriminators (`StakingError<Code>`, etc.) are not used. Branch on `error.message` (CODE
-form) or `error.cause` for the underlying failure:
-
-```typescript
-const result = await sodax.staking.stake({ ... });
-
+const result = await sodax.staking.stake({ /* params */ });
 if (!result.ok) {
-  if (result.error instanceof Error) {
-    // CODE-form errors from catch blocks (e.g. 'RELAY_TIMEOUT', 'STAKE_FAILED')
-    console.error('Error code:', result.error.message);
-    if (result.error.cause) {
-      console.error('Underlying cause:', result.error.cause);
-    }
-  } else {
-    console.error('Unknown error:', result.error);
+  // result.error is typed as `StakeError = SodaxError<StakeErrorCode>`
+  switch (result.error.code) {
+    case 'VALIDATION_FAILED':       // precondition tripped (see context.field)
+    case 'INTENT_CREATION_FAILED':
+    case 'TX_VERIFICATION_FAILED':           // spoke tx not verifiable on-chain
+    case 'TX_SUBMIT_FAILED':        // relay submit failed
+    case 'RELAY_TIMEOUT':           // relay packet did not arrive within timeout
+    case 'RELAY_FAILED':            // relay polling failure / unknown relay error
+    case 'EXECUTION_FAILED':            // generic catch-all (see error.cause)
+    case 'UNKNOWN':
+      handleStakeError(result.error);
+      break;
   }
 }
 ```
 
-Common error messages:
-- `'RELAY_TIMEOUT'` — hub packet did not land within the timeout window
-- Prose messages — precondition failures (e.g. `'Amount must be greater than 0'`, `'SODA token not found'`)
-- `'Approval only supported for EVM spoke chains and [stake, unstake, instantUnstake] operations'`
+### Per-method error code unions
+
+| Method | Codes |
+|---|---|
+| `stake` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `TX_VERIFICATION_FAILED`, `TX_SUBMIT_FAILED`, `RELAY_TIMEOUT`, `RELAY_FAILED`, `EXECUTION_FAILED`, `UNKNOWN` |
+| `unstake` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `TX_SUBMIT_FAILED`, `RELAY_TIMEOUT`, `RELAY_FAILED`, `EXECUTION_FAILED`, `UNKNOWN` |
+| `instantUnstake` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `TX_SUBMIT_FAILED`, `RELAY_TIMEOUT`, `RELAY_FAILED`, `EXECUTION_FAILED`, `UNKNOWN` |
+| `claim` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `TX_SUBMIT_FAILED`, `RELAY_TIMEOUT`, `RELAY_FAILED`, `EXECUTION_FAILED`, `UNKNOWN` |
+| `cancelUnstake` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `TX_SUBMIT_FAILED`, `RELAY_TIMEOUT`, `RELAY_FAILED`, `EXECUTION_FAILED`, `UNKNOWN` |
+| `create<Op>Intent` | `VALIDATION_FAILED`, `INTENT_CREATION_FAILED`, `UNKNOWN` |
+| `approve` | `VALIDATION_FAILED`, `APPROVE_FAILED`, `UNKNOWN` |
+| `isAllowanceValid` | `VALIDATION_FAILED`, `ALLOWANCE_CHECK_FAILED`, `UNKNOWN` |
+| `getStakingInfo*` / `getUnstakingInfo*` / `getStakingConfig` / `getInstantUnstakeRatio` / `getConvertedAssets` / `getStakeRatio` | `VALIDATION_FAILED`, `LOOKUP_FAILED`, `UNKNOWN` |
+
+Note: `TX_VERIFICATION_FAILED` only appears in `StakeErrorCode` because `stake` is the only orchestrator
+that calls `spoke.verifyTxHash`.
+
+### Structured `context`
+
+Every staking error carries an `error.context` payload. Fields vary by code:
+
+| Field | Set on | Notes |
+|---|---|---|
+| `srcChainKey` | all orchestrator + intent codes | low-cardinality — suitable as a logger / Sentry tag |
+| `action` | all orchestrator + intent codes | one of `'stake' \| 'unstake' \| 'instantUnstake' \| 'claim' \| 'cancelUnstake'` |
+| `phase` | most codes | `'validate' \| 'intentCreation' \| 'verify' \| 'submit' \| 'relay' \| 'approve' \| 'allowanceCheck' \| 'infoFetch'` |
+| `relayCode` | `RELAY_TIMEOUT` / `TX_SUBMIT_FAILED` / `RELAY_FAILED` | mirrors the relay-layer `RELAY_ERROR_CODES` contract; carries `'RELAY_POLLING_FAILED'` so polling outage is distinguishable from generic failure |
+| `field` / `reason` | `VALIDATION_FAILED` | which precondition tripped |
+| `method` | `LOOKUP_FAILED` | the read-only method name (`'getStakingInfo'`, `'getUnstakingInfo'`, `'getStakingConfig'`, …) — partitions the 8 readers without per-method codes |
+
+### Type guards
+
+Per-method type guards are runtime-checked and compile-checked in lockstep with the union types. Use
+them in `catch` blocks to short-circuit when a foreign code escapes:
+
+```typescript
+import { isStakeError, isStakingError } from '@sodax/sdk';
+
+try {
+  // ... call sodax.staking.stake ...
+} catch (e) {
+  if (isStakeError(e)) console.error('typed stake error:', e.code, e.context);
+  else if (isStakingError(e)) console.error('staking error from another method:', e.code);
+  else throw e; // not a staking error — bubble up
+}
+```
+
+Available guards: `isStakingError` (broad), `isStakeError` / `isUnstakeError` / `isInstantUnstakeError` /
+`isClaimError` / `isCancelUnstakeError`, `isCreateStakeIntentError` / `isCreateUnstakeIntentError` /
+`isCreateInstantUnstakeIntentError` / `isCreateClaimIntentError` / `isCreateCancelUnstakeIntentError`,
+`isStakingApproveError`, `isStakingAllowanceCheckError`, `isStakingInfoFetchError`.
+
+### Validation invariant
+
+Precondition failures throw a typed `VALIDATION_FAILED` from inside the public method's
+`try/catch`, surfacing as a typed `Result.error` rather than a generic prose `Error`. This means
+consumers can discriminate validation failures the same way as any other code.
+
+```typescript
+import { stakingInvariant } from '@sodax/sdk';
+
+stakingInvariant(amount > 0n, 'Amount must be greater than 0', { field: 'amount' });
+```
+
+### Migration from the pre-v2 taxonomy
+
+The published v1 `StakingError<Code>` shape (8 codes: `STAKE_FAILED`, `UNSTAKE_FAILED`,
+`INSTANT_UNSTAKE_FAILED`, `CLAIM_FAILED`, `CANCEL_UNSTAKE_FAILED`, `INFO_FETCH_FAILED`,
+`ALLOWANCE_CHECK_FAILED`, `APPROVAL_FAILED`) is restored here with module-prefixed names and
+cause-preservation:
+
+| v1 code | v2 code | Notes |
+|---|---|---|
+| `STAKE_FAILED` | `EXECUTION_FAILED` | Generic stake catch-all. Underlying cause on `error.cause`. |
+| `UNSTAKE_FAILED` | `EXECUTION_FAILED` | Generic unstake catch-all. |
+| `INSTANT_UNSTAKE_FAILED` | `EXECUTION_FAILED` | Generic instant-unstake catch-all. |
+| `CLAIM_FAILED` | `EXECUTION_FAILED` | Generic claim catch-all. |
+| `CANCEL_UNSTAKE_FAILED` | `EXECUTION_FAILED` | Generic cancel-unstake catch-all. |
+| `INFO_FETCH_FAILED` | `LOOKUP_FAILED` | Shared by all 8 read-only methods; partition via `context.method`. |
+| `ALLOWANCE_CHECK_FAILED` | `ALLOWANCE_CHECK_FAILED` | Allowance check failed at the spoke layer. |
+| `APPROVAL_FAILED` | `APPROVE_FAILED` | Approve operation failed. |
+| (none) | `VALIDATION_FAILED` | New: typed precondition failures (replaces prose `Error` throws from `invariant`). |
+| (none) | `INTENT_CREATION_FAILED` | New: per-op intent-creation phase tag (e.g. spoke deposit revert). |
+| (none) | `TX_VERIFICATION_FAILED` | New: spoke tx verification phase tag (only set by `stake`). |
+| (none) | `TX_SUBMIT_FAILED` / `RELAY_TIMEOUT` / `RELAY_FAILED` | New: typed relay-phase codes mapped from the shared `RELAY_ERROR_CODES` contract. |
+| (none) | `UNKNOWN` | Reserved fallback for never-classified errors. |
 
 ## Usage Flow
 

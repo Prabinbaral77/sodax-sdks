@@ -1,5 +1,5 @@
 {
-  "name": "sodax-frontend",
+  "name": "sodax-sdks",
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@10.32.1",
@@ -8,7 +8,7 @@
     "build:packages": "turbo run build:packages",
     "dev": "turbo run dev",
     "dev:web": "turbo run dev --filter=web",
-    "dev:demo": "turbo run dev --filter=sodax-demo",
+    "dev:demo": "turbo run dev --filter=demo",
     "pretty": "turbo run pretty",
     "lint": "turbo run lint",
     "lint:packages": "turbo run lint:packages",

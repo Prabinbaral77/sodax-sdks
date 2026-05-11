@@ -6,7 +6,7 @@ Release all 5 SDK packages with a synchronized version bump.
 
 ## Instructions
 
-You are performing an SDK release for the sodax-frontend monorepo. Follow these steps precisely and in order. Stop and report errors at any step rather than continuing.
+You are performing an SDK release for the sodax-sdks monorepo. Follow these steps precisely and in order. Stop and report errors at any step rather than continuing.
 
 ### Package list
 
@@ -156,7 +156,7 @@ If confirmed, create releases in dependency order. Use `CURRENT_VERSION` (the ve
 
 ```bash
 gh release create "@sodax/types@$ARGUMENTS" \
-  --repo icon-project/sodax-frontend \
+  --repo icon-project/sodax-sdks \
   --target release/sdk \
   --title "@sodax/types@$ARGUMENTS" \
   --generate-notes \
@@ -164,7 +164,7 @@ gh release create "@sodax/types@$ARGUMENTS" \
   [--prerelease]
 
 gh release create "@sodax/sdk@$ARGUMENTS" \
-  --repo icon-project/sodax-frontend \
+  --repo icon-project/sodax-sdks \
   --target release/sdk \
   --title "@sodax/sdk@$ARGUMENTS" \
   --generate-notes \
@@ -172,7 +172,7 @@ gh release create "@sodax/sdk@$ARGUMENTS" \
   [--prerelease]
 
 gh release create "@sodax/wallet-sdk-core@$ARGUMENTS" \
-  --repo icon-project/sodax-frontend \
+  --repo icon-project/sodax-sdks \
   --target release/sdk \
   --title "@sodax/wallet-sdk-core@$ARGUMENTS" \
   --generate-notes \
@@ -180,7 +180,7 @@ gh release create "@sodax/wallet-sdk-core@$ARGUMENTS" \
   [--prerelease]
 
 gh release create "@sodax/wallet-sdk-react@$ARGUMENTS" \
-  --repo icon-project/sodax-frontend \
+  --repo icon-project/sodax-sdks \
   --target release/sdk \
   --title "@sodax/wallet-sdk-react@$ARGUMENTS" \
   --generate-notes \
@@ -188,7 +188,7 @@ gh release create "@sodax/wallet-sdk-react@$ARGUMENTS" \
   [--prerelease]
 
 gh release create "@sodax/dapp-kit@$ARGUMENTS" \
-  --repo icon-project/sodax-frontend \
+  --repo icon-project/sodax-sdks \
   --target release/sdk \
   --title "@sodax/dapp-kit@$ARGUMENTS" \
   --generate-notes \
@@ -208,11 +208,11 @@ After all releases are created, print:
 Release $ARGUMENTS complete!
 
 GitHub Releases:
-  - https://github.com/icon-project/sodax-frontend/releases/tag/@sodax/types@$ARGUMENTS
-  - https://github.com/icon-project/sodax-frontend/releases/tag/@sodax/sdk@$ARGUMENTS
-  - https://github.com/icon-project/sodax-frontend/releases/tag/@sodax/wallet-sdk-core@$ARGUMENTS
-  - https://github.com/icon-project/sodax-frontend/releases/tag/@sodax/wallet-sdk-react@$ARGUMENTS
-  - https://github.com/icon-project/sodax-frontend/releases/tag/@sodax/dapp-kit@$ARGUMENTS
+  - https://github.com/icon-project/sodax-sdks/releases/tag/@sodax/types@$ARGUMENTS
+  - https://github.com/icon-project/sodax-sdks/releases/tag/@sodax/sdk@$ARGUMENTS
+  - https://github.com/icon-project/sodax-sdks/releases/tag/@sodax/wallet-sdk-core@$ARGUMENTS
+  - https://github.com/icon-project/sodax-sdks/releases/tag/@sodax/wallet-sdk-react@$ARGUMENTS
+  - https://github.com/icon-project/sodax-sdks/releases/tag/@sodax/dapp-kit@$ARGUMENTS
 
 npm packages (available after CI completes ~3-5 min):
   - https://www.npmjs.com/package/@sodax/types/v/$ARGUMENTS
@@ -223,7 +223,7 @@ npm packages (available after CI completes ~3-5 min):
 
 CONFIG_VERSION: {CURRENT_CONFIG_VERSION + 1}
 
-Monitor CI: gh run list --repo icon-project/sodax-frontend --limit 10
+Monitor CI: gh run list --repo icon-project/sodax-sdks --limit 10
 ```
 
 Then remind the user: "Next step: Share release info (npm links + changelog) in Discord channels per packages/RELEASE_INSTRUCTIONS.md (step 8)."
