@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import type { Address, Hex } from 'viem';
 import {
-  AleoSpokeService,
   EvmAssetManagerService,
   spokeChainConfig,
   Sodax,
@@ -12,7 +11,6 @@ import {
   type SonicSpokeChainConfig,
   type DeepPartial,
   type HttpUrl,
-  type AleoNetworkEnv,
   ChainKeys,
   HUB_CHAIN_KEY,
   getIntentRelayChainId,
@@ -29,8 +27,6 @@ const PROVABLE_API_KEY = process.env.PROVABLE_API_KEY;
 const PROVABLE_CONSUMER_ID = process.env.PROVABLE_CONSUMER_ID;
 const HUB_RPC_URL = process.env.HUB_RPC_URL || 'https://rpc.soniclabs.com';
 const RELAYER_API_ENDPOINT = process.env.RELAYER_API_ENDPOINT as HttpUrl | undefined;
-const IS_TESTNET = process.env.IS_TESTNET === 'true';
-const ALEO_NETWORK: AleoNetworkEnv = IS_TESTNET ? 'testnet' : 'mainnet';
 
 if (!ALEO_PRIVATE_KEY) throw new Error('ALEO_PRIVATE_KEY is required');
 if (!ALEO_PRIVATE_KEY.startsWith('APrivateKey1')) throw new Error('Invalid ALEO_PRIVATE_KEY');
@@ -41,7 +37,7 @@ const aleoWalletProvider = new AleoWalletProvider({
   type: 'privateKey',
   rpcUrl: ALEO_RPC_URL,
   privateKey: ALEO_PRIVATE_KEY,
-  network: ALEO_NETWORK,
+  network: 'mainnet',
   delegate: {
     apiKey: PROVABLE_API_KEY,
     consumerId: PROVABLE_CONSUMER_ID,
@@ -55,9 +51,7 @@ const sodaxConfigOverrides: DeepPartial<SodaxConfig> = {
 
 const sodax = new Sodax(sodaxConfigOverrides);
 const hubProvider = sodax.hubProvider;
-// Build a network-aware AleoSpokeService for testnet runs; the default service in
-// sodax.spokeService.aleoSpokeService is locked to mainnet.
-const aleoSpokeService = IS_TESTNET ? new AleoSpokeService(sodax.config, 'testnet') : sodax.spokeService.aleoSpokeService;
+const aleoSpokeService = sodax.spoke.aleo;
 
 async function submitData(tx_hash: string, address: Address, payload: Hex | null): Promise<unknown> {
   if (!RELAYER_API_ENDPOINT) {
