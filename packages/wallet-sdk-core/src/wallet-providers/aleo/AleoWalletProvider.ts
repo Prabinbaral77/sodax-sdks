@@ -7,18 +7,23 @@ import type {
   AleoNetworkEnv,
 } from '@sodax/types';
 
-import type {
-  Account as ProvableAccount,
-  TransactionOptions as ProvableTransactionOptions,
-} from '@provablehq/aleo-types';
+import type { TransactionOptions as ProvableTransactionOptions } from '@provablehq/aleo-types';
 
-import type { WalletAdapter } from '@provablehq/aleo-wallet-standard';
+import { BaseWalletProvider } from '../BaseWalletProvider.js';
+import type {
+  AleoSDK,
+  AleoWallet,
+  AleoWalletConfig,
+  AleoWalletDefaults,
+  BrowserExtensionAleoWallet,
+  BrowserExtensionAleoWalletConfig,
+  PkAleoWallet,
+  PrivateKeyAleoWalletConfig,
+} from './types.js';
 
 // Lazy-load @provablehq/sdk to avoid pulling 43MB WASM into the webpack bundle graph at import time.
 // The WASM module uses top-level await which breaks SSR and causes OOM during Next.js builds.
 // The SDK default export resolves to testnet — we must import the network-specific build.
-type AleoSDK = typeof import('@provablehq/sdk');
-
 function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
   // Both builds export the same API surface — the cast is safe.
   if (network === 'testnet') return import('@provablehq/sdk/testnet.js') as unknown as Promise<AleoSDK>;
@@ -29,43 +34,6 @@ function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
 const DEFAULT_PK_PRIORITY_FEE = 0;
 /** Minimum fee for browser extension wallets — 0.001 ALEO to ensure transaction acceptance */
 const DEFAULT_BROWSER_FEE = 0.001;
-
-
-export type DelegateProvingConfig = {
-  apiKey: string;
-  consumerId: string;
-  url?: string;
-};
-
-export type PrivateKeyAleoWalletConfig = {
-  type: 'privateKey';
-  rpcUrl: string;
-  privateKey: string;
-  network: AleoNetworkEnv;
-  delegate: DelegateProvingConfig;
-};
-
-export type BrowserExtensionAleoWalletConfig = {
-  type: 'browserExtension';
-  rpcUrl: string;
-  provableAdapter: WalletAdapter;
-  network?: AleoNetworkEnv;
-};
-
-export type AleoWalletConfig = PrivateKeyAleoWalletConfig | BrowserExtensionAleoWalletConfig;
-
-export type PkAleoWallet = {
-  type: 'privateKey';
-  account: InstanceType<Awaited<AleoSDK>['Account']>;
-};
-
-export type BrowserExtensionAleoWallet = {
-  type: 'browserExtension';
-  adapter: WalletAdapter;
-  connectedAccount: ProvableAccount | null;
-};
-
-export type AleoWallet = PkAleoWallet | BrowserExtensionAleoWallet;
 
 export function isPrivateKeyConfig(config: AleoWalletConfig): config is PrivateKeyAleoWalletConfig {
   return config.type === 'privateKey';
@@ -90,13 +58,14 @@ type InitializedState = {
   programManager: InstanceType<Awaited<AleoSDK>['ProgramManager']>;
 };
 
-export class AleoWalletProvider implements IAleoWalletProvider {
+export class AleoWalletProvider extends BaseWalletProvider<AleoWalletDefaults> implements IAleoWalletProvider {
   public readonly chainType = 'ALEO' as const;
   private readonly config: AleoWalletConfig;
   private initPromise: Promise<InitializedState> | null = null;
   private state: InitializedState | null = null;
 
   constructor(config: AleoWalletConfig) {
+    super(config.defaults);
     if (!isPrivateKeyConfig(config) && !isBrowserExtensionConfig(config)) {
       throw new Error('Invalid wallet configuration');
     }
@@ -185,24 +154,26 @@ export class AleoWalletProvider implements IAleoWalletProvider {
 
   async execute(options: AleoExecuteOptions): Promise<AleoExecutionResult> {
     const { wallet, programManager } = await this.ensureInitialized();
-    const { programName, functionName, inputs, priorityFee, privateFee = false } = options;
+    const { programName, functionName, inputs } = options;
+    const privateFee = options.privateFee ?? this.defaults.privateFee ?? false;
     const delegateConfig = isPrivateKeyConfig(this.config) ? this.config.delegate : undefined;
 
     if (isPkAleoWallet(wallet)) {
+      const pkPriorityFee = options.priorityFee ?? this.defaults.priorityFee ?? DEFAULT_PK_PRIORITY_FEE;
       try {
         if (delegateConfig) {
           const provingRequest = await programManager.provingRequest({
             programName,
             functionName,
             inputs,
-            priorityFee: priorityFee ?? DEFAULT_PK_PRIORITY_FEE,
+            priorityFee: pkPriorityFee,
             privateFee,
             broadcast: true,
           });
 
           const provingResponse = await programManager.networkClient.submitProvingRequest({
             provingRequest,
-            url: delegateConfig.url ?? this.getDefaultDelegateUrl(),
+            url: delegateConfig.url ?? this.defaults.delegateUrl ?? this.getDefaultDelegateUrl(),
             apiKey: delegateConfig.apiKey,
             consumerId: delegateConfig.consumerId,
             dpsPrivacy: true,
@@ -215,7 +186,7 @@ export class AleoWalletProvider implements IAleoWalletProvider {
         const txId = await programManager.execute({
           programName,
           functionName,
-          priorityFee: priorityFee ?? DEFAULT_PK_PRIORITY_FEE,
+          priorityFee: pkPriorityFee,
           privateFee,
           inputs,
         });
@@ -233,12 +204,13 @@ export class AleoWalletProvider implements IAleoWalletProvider {
       }
 
       try {
+        const browserFee = options.priorityFee ?? this.defaults.priorityFee ?? DEFAULT_BROWSER_FEE;
         const provableOptions: ProvableTransactionOptions = {
           program: programName,
           function: functionName,
           inputs,
-          fee: priorityFee ?? DEFAULT_BROWSER_FEE,
-          privateFee: privateFee || false,
+          fee: browserFee,
+          privateFee,
         };
 
         const result = await wallet.adapter.executeTransaction(provableOptions);
@@ -264,7 +236,8 @@ export class AleoWalletProvider implements IAleoWalletProvider {
     options: AleoWaitForReceiptOptions = {},
   ): Promise<AleoTransactionReceipt> {
     const { networkClient } = await this.ensureInitialized();
-    const { checkInterval = 2000, timeout = 45000 } = options;
+    const merged = this.mergePolicy('waitForReceipt', options);
+    const { checkInterval = 2000, timeout = 45000 } = merged;
 
     try {
       const confirmedTx = await networkClient.waitForTransactionConfirmation(
