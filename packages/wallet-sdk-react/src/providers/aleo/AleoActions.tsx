@@ -10,6 +10,13 @@ import { ALEO_DEFAULT_NETWORK } from '../../constants.js';
 // string to `connect()`'s parameter type at the boundary instead.
 type AleoConnectNetwork = Parameters<ReturnType<typeof useWallet>['connect']>[0];
 
+// `selectWallet()` is a React setState in adaptor-react. Its `connect`
+// callback only closes over the freshly-selected adapter on the next
+// render + effect. Poll the ref briefly before calling connect, otherwise
+// the adaptor throws WalletNotSelectedError.
+const SELECT_WALLET_PROPAGATION_TIMEOUT_MS = 2000;
+const SELECT_WALLET_POLL_INTERVAL_MS = 10;
+
 /**
  * Registers Aleo ChainActions into the store.
  *
@@ -45,6 +52,14 @@ export const AleoActions = () => {
         // Already connected (e.g. autoConnect on page refresh) — nothing to do.
         if (wallet.adapter.connected) {
           return undefined;
+        }
+
+        const selectionStartedAt = Date.now();
+        while (walletRef.current.wallet?.adapter?.name !== xConnectorId) {
+          if (Date.now() - selectionStartedAt > SELECT_WALLET_PROPAGATION_TIMEOUT_MS) {
+            throw new Error(`Aleo wallet selection did not propagate in time: ${xConnectorId}`);
+          }
+          await new Promise(resolve => setTimeout(resolve, SELECT_WALLET_POLL_INTERVAL_MS));
         }
 
         await walletRef.current.connect(network as AleoConnectNetwork);
