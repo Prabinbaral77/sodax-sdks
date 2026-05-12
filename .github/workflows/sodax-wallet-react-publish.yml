@@ -12,6 +12,8 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -27,15 +29,15 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9.8.0
+          version: 10.32.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build Packages
-        run: pnpm build:packages
+        run: pnpm turbo run build --filter=@sodax/wallet-sdk-react...
       - name: Publish package
         run: |
           cd packages/wallet-sdk-react
           pnpm publish --no-git-checks --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{secrets.SODAX_FRONTEND_NPM_TOKEN}}
+          NODE_AUTH_TOKEN: ${{secrets.SODAX_SDKS_NPM_PUBLISH_TOKEN}}

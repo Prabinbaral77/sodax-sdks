@@ -112,7 +112,7 @@ The chain key in the request payload (e.g. `srcChainKey`) drives both TypeScript
 
 ### Error Handling
 
-All 7 feature modules (swap, moneyMarket, bridge, staking, migration, dex, partner, recovery) emit a single canonical error type — `SodaxError<C>` — with a closed, reason-only code vocabulary. Codes describe **what** went wrong (`RELAY_TIMEOUT`, `INTENT_CREATION_FAILED`); the producing feature is carried as a first-class `feature` field on the error.
+All 8 feature modules (swap, moneyMarket, bridge, staking, migration, dex, partner, recovery) emit a single canonical error type — `SodaxError<C>` — with a closed, reason-only code vocabulary. Codes describe **what** went wrong (`RELAY_TIMEOUT`, `INTENT_CREATION_FAILED`); the producing feature is carried as a first-class `feature` field on the error.
 
 All async public methods return `Result<T, SodaxError<NarrowCode>>` (= `{ ok: true; value: T } | { ok: false; error }`) and wrap their bodies in `try/catch`. The `Result` type is defined in `@sodax/types`.
 
@@ -257,10 +257,15 @@ Concentrated liquidity (similar to Uniswap V3/PancakeSwap V3):
 - `AssetService` — DEX asset wrapping/unwrapping
 - Pool configs defined in `src/shared/constants.ts`
 
+## Gotchas
+
+- **Never use `bigint` in types passed to `JSON.stringify`** — it throws `TypeError` at runtime. Use `string` for numeric fields in API request/response types (e.g. anything in `src/backendApi/`). If `bigint` is needed in domain types, convert to string before serialization. Note: `SodaxError.toJSON` already coerces bigints in `context` to strings — see Error Handling above.
+
 ## Documentation
 
 Detailed feature docs are in `docs/`:
 - `SWAPS.md`, `MONEY_MARKET.md`, `STAKING.md`, `BRIDGE.md`, `DEX.md`, `MIGRATION.md`
+- `BITCOIN_INTEGRATION.md` — Bitcoin trading-wallet model, custody trade-off, readiness gate
 - `CONFIGURE_SDK.md` — SDK initialization patterns
 - `WALLET_PROVIDERS.md` — wallet integration patterns
 - `ARCHITECTURE_REFACTOR_SUMMARY.md` — full architecture reference (spoke services, raw tx handling, Result\<T\>, error convention, wallet-sdk patterns)
