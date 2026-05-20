@@ -531,4 +531,4 @@ When you edit a hook signature, queryKey shape, or `refetchInterval`, also grep 
 
 ## Build
 
-tsup: dual ESM (`.mjs`) + CJS (`.cjs`). React and React Query are externalized (not bundled).
+tsup: ESM-only (`.mjs`) with `.d.ts` declarations (`dts: true`). `splitting: true` for shared-chunk dedup. React, React DOM, and React Query are externalized (not bundled) via `external`.

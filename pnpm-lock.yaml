@@ -432,6 +432,9 @@ importers:
         specifier: 'catalog:'
         version: 2.29.2(bufferutil@4.1.0)(typescript@5.5.4)(utf-8-validate@6.0.6)(zod@3.25.76)
     devDependencies:
+      '@arethetypeswrong/cli':
+        specifier: 'catalog:'
+        version: 0.17.4
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.87.4(react@19.1.4)
@@ -586,6 +589,9 @@ importers:
 
   packages/types:
     devDependencies:
+      '@arethetypeswrong/cli':
+        specifier: 'catalog:'
+        version: 0.17.4
       '@types/node':
         specifier: 'catalog:'
         version: 22.18.1
@@ -795,6 +801,9 @@ importers:
         specifier: 4.5.2
         version: 4.5.2(@types/react@19.2.9)(immer@10.1.1)(react@19.1.4)
     devDependencies:
+      '@arethetypeswrong/cli':
+        specifier: 'catalog:'
+        version: 0.17.4
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.1.0(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.9))(@types/react@19.2.9)(react-dom@19.1.4(react@19.1.4))(react@19.1.4)

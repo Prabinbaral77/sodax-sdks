@@ -13,23 +13,22 @@
     "url": "https://github.com/icon-project/sodax-sdks/issues"
   },
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.12.0"
   },
-  "files": ["dist", "README.md", "docs"],
+  "files": ["dist", "!dist/**/*.map", "README.md", "docs"],
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.mjs"
     },
     "./xchains/*": {
       "types": "./dist/xchains/*/index.d.ts",
-      "import": "./dist/xchains/*/index.mjs",
-      "require": "./dist/xchains/*/index.cjs"
+      "import": "./dist/xchains/*/index.mjs"
     }
   },
   "typesVersions": {
@@ -44,10 +43,11 @@
   "scripts": {
     "build": "NODE_OPTIONS=--max-old-space-size=8192 tsup",
     "dev": "tsup --watch ./src",
-    "prepublishOnly": "tsup",
+    "prepublishOnly": "pnpm run build",
     "clean": "rm -rf dist && rm -rf node_modules && rm -rf .turbo",
     "pretty": "biome format . --write",
     "checkTs": "tsc --noEmit",
+    "check-exports": "attw --pack --profile esm-only",
     "test": "vitest run",
     "check:knip": "knip",
     "lint": "biome lint . --write"
@@ -82,6 +82,7 @@
     "zustand": "4.5.2"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
