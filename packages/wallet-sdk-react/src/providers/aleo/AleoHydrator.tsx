@@ -70,7 +70,6 @@ export const AleoHydrator = () => {
   // Construct the core wallet provider when an adapter is connected. Must wait
   // for `address` so `getWalletAddress()` works without re-entering the connect
   // path. Use the adapter directly (not a ref) so memo deps are stable.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: aleoWallet object ref changes every render; we only care about the listed stable fields
   const walletProvider = useMemo(() => {
     if (aleoWallet.connected && aleoWallet.address && aleoWallet.wallet?.adapter) {
       return new CoreAleoWalletProvider({
