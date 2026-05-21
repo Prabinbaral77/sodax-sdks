@@ -181,7 +181,8 @@ export type HashTxReturnType =
   | InjectiveReturnType<false>
   | StellarReturnType<false>
   | StacksReturnType<false>
-  | NearReturnType<false>;
+  | NearReturnType<false>
+  | AleoReturnType<false>;
 
 export type RawTxReturnType =
   | EvmRawTransaction
