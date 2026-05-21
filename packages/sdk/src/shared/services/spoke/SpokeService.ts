@@ -51,6 +51,7 @@ import {
   isStacksChainKeyType,
   isSuiChainKeyType,
   isUndefinedOrValidWalletProviderForChainKey,
+  isAleoChainKeyType,
 } from '../../guards.js';
 import type { ConfigService } from '../../config/ConfigService.js';
 import type { EvmHubProvider } from '../../entities/EvmHubProvider.js';
@@ -964,6 +965,9 @@ export class SpokeService {
       }
       if (isStacksChainKeyType(chainKey)) {
         return this.verifyReceiptStatus(this.stacks.waitForTransactionReceipt({ txHash, chainKey }));
+      }
+      if (isAleoChainKeyType(chainKey)) {
+        return this.verifyReceiptStatus(this.aleo.waitForTransactionReceipt({ txHash, chainKey }));
       }
 
       return { ok: true, value: true };
