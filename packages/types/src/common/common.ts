@@ -264,7 +264,7 @@ export type FeeEstimateTransaction = {
 };
 
 export type NearGasEstimate = bigint;
-export type AleoGasEstimate = bigint | number;
+export type AleoGasEstimate = bigint;
 
 export type GasEstimateType =
   | EvmGasEstimate
