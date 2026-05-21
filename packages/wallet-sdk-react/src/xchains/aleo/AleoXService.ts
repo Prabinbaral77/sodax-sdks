@@ -14,11 +14,11 @@ function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
 
 export class AleoXService extends XService {
   private static instance: AleoXService;
-  public network: AleoNetworkEnv = 'mainnet';
+  private network: AleoNetworkEnv = 'mainnet';
 
   // Lazily created after SDK loads; use ensureNetworkClient() in async methods.
   private _networkClient: Awaited<AleoSDK>['AleoNetworkClient']['prototype'] | null = null;
-  public rpcUrl = 'https://api.provable.com/v2';
+  private rpcUrl = 'https://api.provable.com/v2';
 
   private constructor() {
     super('ALEO');
