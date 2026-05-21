@@ -55,7 +55,7 @@ export class AleoXService extends XService {
         const mapping = await networkClient.getProgramMappingValue('credits.aleo', 'account', address);
 
         if (mapping) {
-          const valueStr = mapping.toString().replace('u64', '');
+          const valueStr = mapping.toString().replace(/u.*/, '');
           return BigInt(valueStr);
         }
 
