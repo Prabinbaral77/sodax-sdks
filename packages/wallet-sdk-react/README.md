@@ -155,7 +155,7 @@ See [Connectors](docs/CONNECTORS.md) for the full list of deep-import sub-paths.
 
 ## Requirements
 
-- Node.js >= 18.0.0
+- Node.js >= 20.12.0
 - React >= 19
 - TypeScript
 

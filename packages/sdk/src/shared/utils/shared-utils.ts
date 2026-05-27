@@ -14,7 +14,7 @@ import { hexToBytes, toHex } from 'viem';
 import { bcs } from '@mysten/sui/bcs';
 import { PublicKey } from '@solana/web3.js';
 import { Address as StellarAddress, xdr } from '@stellar/stellar-sdk';
-import { Cl, cvToString, deserializeCV, serializeCV } from '@stacks/transactions';
+import { Cl, cvToString, deserializeCV, serializeCV } from '@sodax/libs/stacks/core';
 import { decodeBech32m } from './bech32m.js';
 
 export async function retry<T>(
