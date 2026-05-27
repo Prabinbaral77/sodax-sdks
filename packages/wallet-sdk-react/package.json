@@ -13,23 +13,22 @@
     "url": "https://github.com/icon-project/sodax-sdks/issues"
   },
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.12.0"
   },
-  "files": ["dist", "README.md", "docs"],
+  "files": ["dist", "!dist/**/*.map", "README.md", "docs"],
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.mjs"
     },
     "./xchains/*": {
       "types": "./dist/xchains/*/index.d.ts",
-      "import": "./dist/xchains/*/index.mjs",
-      "require": "./dist/xchains/*/index.cjs"
+      "import": "./dist/xchains/*/index.mjs"
     }
   },
   "typesVersions": {
@@ -44,18 +43,17 @@
   "scripts": {
     "build": "NODE_OPTIONS=--max-old-space-size=8192 tsup",
     "dev": "tsup --watch ./src",
-    "prepublishOnly": "tsup",
+    "prepublishOnly": "pnpm run build",
     "clean": "rm -rf dist && rm -rf node_modules && rm -rf .turbo",
     "pretty": "biome format . --write",
     "checkTs": "tsc --noEmit",
+    "check-exports": "attw --pack --profile esm-only",
     "test": "vitest run",
     "check:knip": "knip",
+    "check:circular-deps": "madge --circular $(find ./src -name '*.ts' -o -name '*.tsx')",
     "lint": "biome lint . --write"
   },
   "dependencies": {
-    "@stacks/connect": "catalog:",
-    "@stacks/network": "catalog:",
-    "@stacks/transactions": "catalog:",
     "@creit.tech/stellar-wallets-kit": "^1.7.5",
     "@hot-labs/near-connect": "0.10.0",
     "@injectivelabs/networks": "catalog:",
@@ -64,10 +62,10 @@
     "@injectivelabs/wallet-base": "catalog:",
     "@injectivelabs/wallet-core": "catalog:",
     "@injectivelabs/wallet-cosmos": "catalog:",
-    "@injectivelabs/wallet-strategy": "catalog:",
     "@mysten/dapp-kit": "catalog:",
     "@mysten/sui": "catalog:",
     "near-api-js": "catalog:",
+    "@sodax/libs": "workspace:*",
     "@sodax/types": "workspace:*",
     "@sodax/wallet-sdk-core": "workspace:*",
     "@solana/spl-token": "catalog:",
@@ -82,11 +80,13 @@
     "zustand": "4.5.2"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "happy-dom": "^20.8.9",
     "knip": "catalog:",
+    "madge": "catalog:",
     "react-dom": "19.1.4",
     "tslib": "catalog:",
     "tsup": "catalog:",
