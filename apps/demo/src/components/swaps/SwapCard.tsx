@@ -18,7 +18,7 @@ import { parseUnits, formatUnits } from 'viem';
 import { type CreateIntentParams, getSupportedSolverTokens, type SolverIntentQuoteRequest } from '@sodax/sdk';
 import type { GetWalletProviderType, SubmitSwapTxRequest, SwapIntentData } from '@sodax/sdk';
 import BigNumber from 'bignumber.js';
-import { ArrowDownUp, ArrowLeftRight } from 'lucide-react';
+import { ArrowDownUp, ArrowLeftRight, Loader2 } from 'lucide-react';
 import React, { type SetStateAction, useMemo, useState } from 'react';
 import {
   useQuote,
@@ -32,6 +32,7 @@ import {
   useTradingWalletBalance,
   useBackendSubmitSwapTx,
   useXBalances,
+  useNearStorageGate,
 } from '@sodax/dapp-kit';
 import {
   getXChainType,
@@ -56,11 +57,7 @@ import { BitcoinSetupPanel } from '@/components/bitcoin/BitcoinSetupPanel';
 
 const SUBMIT_TX_API_CONFIG = { baseURL: 'https://canary-api.sodax.com/v1/bes' } as const;
 
-export default function SwapCard({
-  setOrders,
-}: {
-  setOrders: (value: SetStateAction<Order[]>) => void;
-}) {
+export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAction<Order[]>) => void }) {
   const { sodax } = useSodaxContext();
   //chain and account states
   const [src, setSrc] = useState<{ chain: SpokeChainKey; token: XToken }>({
@@ -107,8 +104,15 @@ export default function SwapCard({
     console.error('trustlineError', trustlineError);
   }
   const { requestTrustline } = useRequestTrustline(dst.token?.address);
+  const nearStorage = useNearStorageGate({
+    dstChainKey: dst.chain,
+    token: intentOrderPayload?.outputToken,
+    accountId: destAccount.address,
+    walletProvider: destWalletProvider,
+  });
   const [open, setOpen] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [nearStorageError, setNearStorageError] = useState<string | null>(null);
   const [slippage, setSlippage] = useState<string>('0.5');
   const [useSubmitTxApi, setUseSubmitTxApi] = useState(false);
   const { mutateAsyncSafe: submitSwapTx, isPending: isSubmitting } = useBackendSubmitSwapTx();
@@ -421,6 +425,15 @@ export default function SwapCard({
     });
   };
 
+  const handleRegisterNearStorage = async () => {
+    const result = await nearStorage.registerStorage();
+    if (result && !result.ok) {
+      setNearStorageError(formatMutationFailureMessage(result.error, 'Storage registration failed'));
+      return;
+    }
+    setNearStorageError(null);
+  };
+
   return (
     <Card className="w-full max-w-lg mx-auto">
       <CardHeader>
@@ -668,7 +681,13 @@ export default function SwapCard({
                 {dst.chain === ChainKeys.STELLAR_MAINNET && !isTrustlineLoading && !hasSufficientTrustline && (
                   <div className="text-red-500">Insufficient Stellar trustline (request trustline to proceed)</div>
                 )}
+                {nearStorage.needsRegistration && (
+                  <div className="text-red-500">
+                    Recipient is not storage-registered for this token on NEAR (register storage to proceed)
+                  </div>
+                )}
                 {approveError ? <div className="text-red-500 text-sm">{approveError}</div> : null}
+                {nearStorageError ? <div className="text-red-500 text-sm">{nearStorageError}</div> : null}
               </div>
             </div>
             <DialogFooter>
@@ -699,7 +718,8 @@ export default function SwapCard({
                       (src.chain !== ChainKeys.BITCOIN_MAINNET && !hasAllowed) ||
                       isSubmitting ||
                       (src.chain === ChainKeys.BITCOIN_MAINNET && !isBitcoinReady) ||
-                      (dst.chain === ChainKeys.BITCOIN_MAINNET && !isDestBitcoinReady)
+                      (dst.chain === ChainKeys.BITCOIN_MAINNET && !isDestBitcoinReady) ||
+                      nearStorage.blocksAction
                     }
                   >
                     <ArrowLeftRight className="mr-2 h-4 w-4" /> Swap
@@ -715,6 +735,25 @@ export default function SwapCard({
                   disabled={isTrustlineLoading}
                 >
                   Request Trustline
+                </Button>
+              )}
+              {nearStorage.isNear && (nearStorage.isChecking || nearStorage.needsRegistration) && (
+                <Button
+                  className="w-full"
+                  onClick={handleRegisterNearStorage}
+                  disabled={nearStorage.isChecking || nearStorage.isRegistering}
+                >
+                  {nearStorage.isChecking ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Checking storage...
+                    </>
+                  ) : nearStorage.isRegistering ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Registering...
+                    </>
+                  ) : (
+                    'Register Storage'
+                  )}
                 </Button>
               )}
             </DialogFooter>
