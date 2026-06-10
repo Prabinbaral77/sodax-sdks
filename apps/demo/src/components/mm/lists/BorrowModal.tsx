@@ -15,6 +15,8 @@ import {
   useSodaxContext,
   useNearStorageGate,
 } from '@sodax/dapp-kit';
+import { buildMmDeliveryParams } from '@/lib/mmBtc';
+import { useBtcTradingBalance } from '@/hooks/useBtcTradingBalance';
 import { useAppStore } from '@/zustand/useAppStore';
 import {
   getChainsWithThisToken,
@@ -81,6 +83,12 @@ export function BorrowModal({
   const destWalletProvider = useWalletProvider({ xChainId: dstChainKey });
   const { address: srcAddress } = useXAccount({ xChainId: srcChainKey });
   const { address: dstAddress } = useXAccount({ xChainId: dstChainKey });
+
+  // BTC delivery goes to the Bound Exchange trading wallet; needs a signed-in session (balance not required).
+  const { isBitcoin: isBtcDelivery, tradingAddress: deliveryTradingAddress } = useBtcTradingBalance({
+    chainId: dstChainKey,
+  });
+  const btcDeliveryNotReady = isBtcDelivery && !!dstAddress && !deliveryTradingAddress;
 
   const isSameChain = srcChainKey === dstChainKey;
 
@@ -189,7 +197,13 @@ export function BorrowModal({
   const params: MoneyMarketBorrowParams | undefined = useMemo(() => {
     if (!parsedAmount || exceedsMaxBorrow || !destinationToken || !srcAddress) return undefined;
 
-    const crossChainParams = isSameChain ? {} : { dstChainKey, dstAddress };
+    const crossChainParams = buildMmDeliveryParams({
+      dstChainKey,
+      dstAddress,
+      isSameChain,
+      btcTradingAddress: deliveryTradingAddress,
+    });
+    if (crossChainParams === null) return undefined; // BTC delivery requires a connected destination wallet
 
     return {
       srcChainKey,
@@ -209,6 +223,7 @@ export function BorrowModal({
     dstAddress,
     srcAddress,
     isSameChain,
+    deliveryTradingAddress,
   ]);
 
   const { isWrongChain, handleSwitchChain } = useEvmSwitchChain({ xChainId: srcChainKey });
@@ -317,6 +332,12 @@ export function BorrowModal({
                 >
                   Open wallet menu
                 </button>
+              </p>
+            )}
+            {btcDeliveryNotReady && (
+              <p className="text-xs text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-200 dark:border-amber-800">
+                Sign in to the <strong>Bitcoin Trading Wallet</strong> section on the Money Market page to receive the
+                borrowed BTC.
               </p>
             )}
           </div>

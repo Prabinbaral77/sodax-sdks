@@ -9,6 +9,8 @@ import { useEvmSwitchChain, useWalletProvider, useXAccount } from '@sodax/wallet
 import { parseUnits } from 'viem';
 import { useMMApprove, useSodaxContext, useWithdraw, useNearStorageGate } from '@sodax/dapp-kit';
 import { type SpokeChainKey, type XToken, getChainType } from '@sodax/sdk';
+import { buildMmDeliveryParams } from '@/lib/mmBtc';
+import { useBtcTradingBalance } from '@/hooks/useBtcTradingBalance';
 import { useAppStore } from '@/zustand/useAppStore';
 import type { MoneyMarketWithdrawParams } from '@sodax/sdk';
 import {
@@ -71,6 +73,12 @@ export function WithdrawModal({
   const { address: srcAddress } = useXAccount({ xChainId: srcChainKey });
   const { address: dstAddress } = useXAccount({ xChainId: dstChainKey });
 
+  // BTC delivery goes to the Bound Exchange trading wallet; needs a signed-in session (balance not required).
+  const { isBitcoin: isBtcDelivery, tradingAddress: deliveryTradingAddress } = useBtcTradingBalance({
+    chainId: dstChainKey,
+  });
+  const btcDeliveryNotReady = isBtcDelivery && !!dstAddress && !deliveryTradingAddress;
+
   const isSameChain = srcChainKey === dstChainKey;
 
   const nearStorage = useNearStorageGate({
@@ -85,10 +93,17 @@ export function WithdrawModal({
   const params: MoneyMarketWithdrawParams | undefined = useMemo(() => {
     if (!amount || !srcAddress) return undefined;
     if (!isSameChain && !dstAddress) return undefined;
+
+    const crossChainParams = buildMmDeliveryParams({
+      dstChainKey,
+      dstAddress,
+      isSameChain,
+      btcTradingAddress: deliveryTradingAddress,
+    });
+    if (crossChainParams === null) return undefined; // BTC delivery requires a connected destination wallet
+
     const normalizedAmount = amount.replace(',', '.');
     const parsedAmount = parseUnits(normalizedAmount, destinationToken.decimals);
-
-    const crossChainParams = isSameChain ? {} : { dstChainKey, dstAddress };
 
     return {
       srcChainKey,
@@ -98,7 +113,7 @@ export function WithdrawModal({
       action: 'withdraw' as const,
       ...crossChainParams,
     };
-  }, [amount, srcAddress, dstAddress, srcChainKey, dstChainKey, destinationToken, isSameChain]);
+  }, [amount, srcAddress, dstAddress, srcChainKey, dstChainKey, destinationToken, isSameChain, deliveryTradingAddress]);
 
   const isEvmChain = getChainType(srcChainKey) === 'EVM';
 
@@ -238,6 +253,12 @@ export function WithdrawModal({
                 >
                   Open wallet menu
                 </button>
+              </p>
+            )}
+            {btcDeliveryNotReady && (
+              <p className="text-xs text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-200 dark:border-amber-800">
+                Sign in to the <strong>Bitcoin Trading Wallet</strong> section on the Money Market page to receive the
+                withdrawn BTC.
               </p>
             )}
           </div>
