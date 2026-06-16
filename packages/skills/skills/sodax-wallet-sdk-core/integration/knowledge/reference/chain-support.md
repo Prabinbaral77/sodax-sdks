@@ -37,8 +37,9 @@ Chain families and spoke chain keys this package can sign for. Keys live in `@so
 | Injective | `InjectiveWalletProvider` | `ChainKeys.INJECTIVE_MAINNET` |
 | NEAR      | `NearWalletProvider`      | `ChainKeys.NEAR_MAINNET` |
 | Stacks    | `StacksWalletProvider`    | `ChainKeys.STACKS_MAINNET` |
+| Aleo      | `AleoWalletProvider`      | `ChainKeys.ALEO_MAINNET` |
 
-> 20 spoke chains total = 12 EVM + 8 non-EVM. The hub chain (Sonic) is counted with EVM.
+> 21 spoke chains total = 12 EVM + 9 non-EVM. The hub chain (Sonic) is counted with EVM.
 
 ---
 
@@ -57,6 +58,7 @@ Run-time deps each provider pulls in. See [`../recipes/library-exports.md`](../r
 | `InjectiveWalletProvider` | `@injectivelabs/sdk-ts`, `@injectivelabs/wallet-core`, `@injectivelabs/networks`, `@injectivelabs/ts-types` |
 | `NearWalletProvider`      | `near-api-js`, `@hot-labs/near-connect` |
 | `StacksWalletProvider`    | `@stacks/transactions`, `@stacks/connect`, `@stacks/network` |
+| `AleoWalletProvider`      | `@provablehq/sdk` (lazy-loaded), `@provablehq/aleo-wallet-standard` |
 
 ---
 

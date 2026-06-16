@@ -22,6 +22,7 @@
     "./skills/sodax-wallet-sdk-core/injective",
     "./skills/sodax-wallet-sdk-core/near",
     "./skills/sodax-wallet-sdk-core/stacks",
+    "./skills/sodax-wallet-sdk-core/aleo",
     "./skills/sodax-wallet-sdk-react",
     "./skills/sodax-wallet-sdk-react/connect",
     "./skills/sodax-wallet-sdk-react/wallet-modal",
