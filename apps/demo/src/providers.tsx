@@ -106,6 +106,12 @@ export default function Providers({ children }: { children: ReactNode }) {
         },
       },
       STACKS: { chains: { [ChainKeys.STACKS_MAINNET]: 'mainnet' } },
+      ALEO: {
+        network: 'mainnet',
+        chains: {
+          [ChainKeys.ALEO_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.ALEO_MAINNET] },
+        },
+      },
     };
   }, []);
 
@@ -129,6 +135,7 @@ export default function Providers({ children }: { children: ReactNode }) {
         [ChainKeys.NEAR_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.NEAR_MAINNET] },
         [ChainKeys.STELLAR_MAINNET]: rpcConfig[ChainKeys.STELLAR_MAINNET],
         [ChainKeys.BITCOIN_MAINNET]: rpcConfig[ChainKeys.BITCOIN_MAINNET],
+        [ChainKeys.ALEO_MAINNET]: { rpcUrl: rpcConfig[ChainKeys.ALEO_MAINNET] },
       },
     };
   }, [solverEnvironment]);
