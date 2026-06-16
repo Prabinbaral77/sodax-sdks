@@ -194,7 +194,7 @@ export class SpokeService {
       }
       default: {
         const exhaustiveCheck: never = chainType; // The never type is used to ensure that the default case is exhaustive
-        console.log(exhaustiveCheck);
+        this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
         throw new Error(`[getSpokeService] Invalid chain type. Valid chain types: ${ChainTypeArr.join(', ')}`);
       }
     }
@@ -391,7 +391,7 @@ export class SpokeService {
         }
         default: {
           const exhaustiveCheck: never = chainType;
-          console.log(exhaustiveCheck);
+          this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
           return {
             ok: false,
             error: new Error(`[estimateGas] Invalid chain type. Valid chain types: ${ChainTypeArr.join(', ')}`),
@@ -508,18 +508,18 @@ export class SpokeService {
         }),
       });
 
-      console.warn('simulateRecvMessage did not revert as expected', { result });
+      this.config.logger.warn('simulateRecvMessage did not revert as expected', { result });
       return {
         ok: false,
         error: new Error('Function should have reverted with "Simulation completed"'),
       };
     } catch (error: unknown) {
       if (error instanceof Error && error.message?.includes('Simulation completed')) {
-        console.warn('simulateRecvMessage completed successfully with expected revert');
+        this.config.logger.warn('simulateRecvMessage completed successfully with expected revert');
         return { ok: true, value: true };
       }
 
-      console.error('simulateRecvMessage failed with unexpected error:', error);
+      this.config.logger.error('simulateRecvMessage failed with unexpected error', error);
       return { ok: false, error };
     }
   }
@@ -633,7 +633,7 @@ export class SpokeService {
         }
         default: {
           const exhaustiveCheck: never = chainType;
-          console.log(exhaustiveCheck);
+          this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
           return {
             ok: false,
             error: new Error(`[deposit] Invalid chain type. Valid chain types: ${ChainTypeArr.join(', ')}`),
@@ -719,7 +719,7 @@ export class SpokeService {
         }
         default: {
           const exhaustiveCheck: never = chainType;
-          console.log(exhaustiveCheck);
+          this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
           return {
             ok: false,
             error: new Error(`[getDeposit] Invalid chain type. Valid chain types: ${ChainTypeArr.join(', ')}`),
@@ -856,7 +856,7 @@ export class SpokeService {
         }
         default: {
           const exhaustiveCheck: never = chainType;
-          console.log(exhaustiveCheck);
+          this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
           return {
             ok: false,
             error: new Error(`[sendMessage] Invalid chain type. Valid chain types: ${ChainTypeArr.join(', ')}`),
@@ -945,10 +945,10 @@ export class SpokeService {
         const result = await this.solana.waitForTransactionReceipt({ txHash, chainKey });
 
         if (!result.ok || result.value.status !== 'success') {
-          console.warn(
+          this.config.logger.warn(
             `Solana verifyTxHash failed: ${!result.ok ? result.error : 'error' in result.value ? result.value.error : 'unknown'}`,
           );
-          console.warn('Returning true to assume transaction exists on chain in future ');
+          this.config.logger.warn('Returning true to assume transaction exists on chain in future ');
           return { ok: true, value: true };
         }
 
@@ -1057,7 +1057,7 @@ export class SpokeService {
         }
         default: {
           const exhaustiveCheck: never = chainType;
-          console.log(exhaustiveCheck);
+          this.config.logger.debug('Unhandled exhaustive case', { value: exhaustiveCheck });
           return { ok: false, error: new Error(`waitForTransactionReceipt not supported for ${params.chainKey}`) };
         }
       }

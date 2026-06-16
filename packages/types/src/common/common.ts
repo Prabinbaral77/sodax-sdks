@@ -332,7 +332,7 @@ export type StellarRpcConfig = {
   sorobanRpcUrl?: string;
 };
 
-// Type for Bitcoin RPC configuration with Radfi API endpoints
+// Type for Bitcoin RPC configuration with Bound Exchange API endpoints
 export type BitcoinRpcConfig = {
   rpcUrl?: string;
   radfiApiUrl?: string;
