@@ -82,7 +82,7 @@ export class AleoXService extends XService {
       const match = result.match(/balance:\s*(\d+)u128/);
       return match?.[1] != null ? BigInt(match[1]) : 0n;
     } catch (e) {
-      console.error('error AleoService: ', e);
+      console.error(`[wallet-sdk-react] ALEO getBalance failed for ${xToken.symbol}:`, e);
       return BigInt(0);
     }
   }
