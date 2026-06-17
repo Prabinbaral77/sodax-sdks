@@ -858,9 +858,6 @@ importers:
       '@mysten/sui':
         specifier: 'catalog:'
         version: 1.21.2(typescript@5.5.4)
-      '@provablehq/aleo-types':
-        specifier: 'catalog:'
-        version: 0.3.0-alpha.3
       '@provablehq/aleo-wallet-adaptor-core':
         specifier: 'catalog:'
         version: 0.3.0-alpha.1
