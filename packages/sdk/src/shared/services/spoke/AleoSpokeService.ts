@@ -34,6 +34,9 @@ const ALEO_CONNSN_GENERATION_RETRIES = 3;
 // Lazy-load @provablehq/sdk to avoid pulling 43MB WASM into the bundle graph at import time.
 // The WASM module uses top-level await which breaks SSR and causes OOM during builds. The SDK
 // default export resolves to testnet — we must import the network-specific build.
+// NOTE: this loader is duplicated in @sodax/wallet-sdk-core and @sodax/wallet-sdk-react on purpose —
+// the dynamic import must live in each package's own bundle graph. Do NOT hoist it into @sodax/types
+// (zero-runtime-dependency contract); @sodax/libs is the only valid shared home if ever centralized.
 type AleoSDK = typeof import('@provablehq/sdk');
 
 function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {

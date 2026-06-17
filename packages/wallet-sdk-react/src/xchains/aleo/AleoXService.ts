@@ -8,6 +8,9 @@ const aleoChainConfig = spokeChainConfig[ChainKeys.ALEO_MAINNET] as AleoSpokeCha
 // Lazy-load @provablehq/sdk to avoid triggering WASM initialization at import time.
 // The WASM module uses top-level await which fails during SSR / Vercel builds.
 // The SDK default export resolves to testnet — we must import the network-specific build.
+// NOTE: this loader is duplicated in @sodax/sdk and @sodax/wallet-sdk-core on purpose — the
+// dynamic import must live in each package's own bundle graph. Do NOT hoist it into @sodax/types
+// (zero-runtime-dependency contract); @sodax/libs is the only valid shared home if ever centralized.
 type AleoSDK = typeof import('@provablehq/sdk');
 
 function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {

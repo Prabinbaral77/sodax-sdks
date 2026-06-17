@@ -24,6 +24,9 @@ import type {
 // Lazy-load @provablehq/sdk to avoid pulling 43MB WASM into the webpack bundle graph at import time.
 // The WASM module uses top-level await which breaks SSR and causes OOM during Next.js builds.
 // The SDK default export resolves to testnet — we must import the network-specific build.
+// NOTE: this loader is duplicated in @sodax/sdk and @sodax/wallet-sdk-react on purpose — the
+// dynamic import must live in each package's own bundle graph. Do NOT hoist it into @sodax/types
+// (zero-runtime-dependency contract); @sodax/libs is the only valid shared home if ever centralized.
 function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
   // Both builds export the same API surface — the cast is safe.
   if (network === 'testnet') return import('@provablehq/sdk/testnet.js') as unknown as Promise<AleoSDK>;
