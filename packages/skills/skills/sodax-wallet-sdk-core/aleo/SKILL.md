@@ -1,6 +1,10 @@
 ---
 name: sodax-wallet-sdk-core-aleo
 description: 'Granular skill for the @sodax/wallet-sdk-core v2 Aleo wallet provider only — `AleoWalletProvider` (backed by the lazy-loaded @provablehq/sdk + @provablehq/aleo-wallet-standard adapter). Use when a backend / Node script / CI / bot / non-React browser flow needs to instantiate an Aleo provider directly and execute Aleo programs + wait for receipts — e.g. "instantiate AleoWalletProvider", "private-key Aleo signing in Node", "execute an Aleo program function", "executeAndWait", "delegated proving". Covers BOTH integration (write new v2 code) and migration (port v1 — additive at this surface). Picks via Step 1. Links into the parent sodax-wallet-sdk-core knowledge tree. For React dapps use the sodax-wallet-sdk-react skill instead (get the typed provider via useWalletProvider).'
+license: MIT
+metadata:
+  version: '0.0.1'
+  author: sodax
 ---
 
 # Aleo (`wallet-sdk-core` granular skill)
