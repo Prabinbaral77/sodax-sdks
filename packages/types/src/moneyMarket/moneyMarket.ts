@@ -179,9 +179,9 @@ export const moneyMarketSupportedTokens = {
   [ChainKeys.BITCOIN_MAINNET]: [
     spokeChainConfig[ChainKeys.BITCOIN_MAINNET].supportedTokens.BTC,
   ] as const satisfies XToken[],
-  [ChainKeys.ALEO_MAINNET]: [
-    spokeChainConfig[ChainKeys.ALEO_MAINNET].supportedTokens.ALEO,
-  ] as const satisfies XToken[],
+  // Aleo has no money-market assets yet — its hub vault is not deployed on mainnet
+  // (ALEO/VUSDC carry a placeholder `vault: '0x'`). Add tokens here once the vault ships.
+  [ChainKeys.ALEO_MAINNET]: [] as const satisfies XToken[],
 } as const satisfies Record<SpokeChainKey, readonly XToken[]>;
 
 export const moneyMarketReserveAssets = [
