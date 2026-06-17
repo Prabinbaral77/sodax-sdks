@@ -125,7 +125,7 @@ describe('AleoWalletProvider', () => {
       expect(
         () =>
           new AleoWalletProvider(
-            // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
+            // testing invalid runtime input
             { rpcUrl: RPC_URL } as any,
           ),
       ).toThrow('Invalid wallet configuration');
