@@ -177,7 +177,7 @@ export class SwapService {
 
   public constructor({ config, hubProvider, spoke }: SwapServiceConstructorParams) {
     this.solver = config.solver;
-    this.partnerFee = config.swaps.partnerFee;
+    this.partnerFee = config.swapPartnerFee;
     this.relayerApiEndpoint = config.relay.relayerApiEndpoint;
     this.config = config;
     this.hubProvider = hubProvider;
@@ -698,7 +698,7 @@ export class SwapService {
           createIntentParams: params,
           creatorHubWalletAddress,
           solverConfig: this.solver,
-          fee: this.config.swaps.partnerFee,
+          fee: this.config.swapPartnerFee,
           hubProvider: this.hubProvider,
         } as const;
 
@@ -731,7 +731,7 @@ export class SwapService {
         },
         creatorHubWalletAddress,
         this.config,
-        this.config.swaps.partnerFee,
+        this.config.swapPartnerFee,
       );
 
       const coreDepositParams = {
