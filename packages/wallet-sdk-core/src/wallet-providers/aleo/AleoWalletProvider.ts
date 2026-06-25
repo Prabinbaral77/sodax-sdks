@@ -38,6 +38,34 @@ const DEFAULT_PK_PRIORITY_FEE = 0;
 /** Minimum fee for browser extension wallets — 0.001 ALEO to ensure transaction acceptance */
 const DEFAULT_BROWSER_FEE = 0.001;
 
+/**
+ * Opt-in execution diagnostics. Set `ALEO_DEBUG=1` (Node) to dump the import graph, per-program
+ * on-chain deployment status, and the actual transition trace before an execute/broadcast. Used to
+ * localize errors like "Missing stack for program '…'" — see logExecutionDiagnostics. Guarded against
+ * `process` being undefined so the platform-neutral browser bundle stays unaffected.
+ */
+function isAleoDebugEnabled(): boolean {
+  return (
+    typeof process !== 'undefined' &&
+    (process.env?.ALEO_DEBUG === '1' || process.env?.ALEO_DEBUG === 'true')
+  );
+}
+
+/**
+ * Opt-in Layer-2 verify probe (`ALEO_DEBUG_VERIFY=1`, implies ALEO_DEBUG). Locally proves the execution
+ * (`ProgramManager.run`) then re-runs `ProgramManager.verifyExecution` — which IS snarkVM's
+ * `Process::verify_execution` — twice: once with the full import set and once with the suspect program
+ * (gmp_lib) stripped. The stripped run reproduces the "stack" error inside the verify path, proving which
+ * snarkVM function emits it and which program is missing. Heavier than the call-graph dump (it proves), so
+ * it is gated separately.
+ */
+function isAleoVerifyProbeEnabled(): boolean {
+  return (
+    typeof process !== 'undefined' &&
+    (process.env?.ALEO_DEBUG_VERIFY === '1' || process.env?.ALEO_DEBUG_VERIFY === 'true')
+  );
+}
+
 export function isPrivateKeyConfig(config: AleoWalletConfig): config is PrivateKeyAleoWalletConfig {
   return config.type === 'privateKey';
 }
@@ -155,10 +183,19 @@ export class AleoWalletProvider extends BaseWalletProvider<AleoWalletDefaults> i
   }
 
   async execute(options: AleoExecuteOptions): Promise<AleoExecutionResult> {
-    const { wallet, programManager } = await this.ensureInitialized();
+    const state = await this.ensureInitialized();
+    const { wallet, programManager } = state;
     const { programName, functionName, inputs } = options;
     const privateFee = options.privateFee ?? this.defaults.privateFee ?? false;
     const delegateConfig = isPrivateKeyConfig(this.config) ? this.config.delegate : undefined;
+
+    // Read-only call-graph / stack diagnostics (ALEO_DEBUG=1; ALEO_DEBUG_VERIFY=1 adds the verify probe).
+    // Never throws — must not affect the real execute/broadcast path; it only prints what the verifier
+    // will later walk.
+    const runVerifyProbe = isAleoVerifyProbeEnabled();
+    if (isAleoDebugEnabled() || runVerifyProbe) {
+      await this.logExecutionDiagnostics(state, { programName, functionName, inputs }, { runVerifyProbe });
+    }
 
     if (isPkAleoWallet(wallet)) {
       const pkPriorityFee = options.priorityFee ?? this.defaults.priorityFee ?? DEFAULT_PK_PRIORITY_FEE;
@@ -231,6 +268,250 @@ export class AleoWalletProvider extends BaseWalletProvider<AleoWalletDefaults> i
     }
 
     throw new Error('Invalid wallet configuration');
+  }
+
+  /**
+   * Read-only diagnostics for the "Missing stack for program '…'" class of execution-verification
+   * failures. Aleo bundles one transition PER program crossed in a call (root + every imported program
+   * it `call`s, e.g. asset_manager_core_v1.aleo → gmp_lib_v1.aleo). The validating node walks each
+   * transition and resolves a Stack per program; a missing one bails with that message, raised from many
+   * snarkVM call sites so the message alone can't localize it. This dumps, before the real broadcast:
+   *   1. the root program source + its declared `import` lines,
+   *   2. the transitive import map, each program's on-chain deployment status, and its declared imports,
+   *   3. the static call graph (by declared imports),
+   *   4. the ACTUAL transition trace via a local authorization — the lightest stage that resolves the full
+   *      call graph (no proof). If that throws, local synthesis stopped at the missing program, proving the
+   *      failure is import-resolution/synthesis-side rather than chain-verify-side.
+   *   5. (opts.runVerifyProbe) a Layer-2 verify probe: locally proves the execution, then runs
+   *      `verifyExecution` (= snarkVM `Process::verify_execution`) once with the full import set and once
+   *      with the suspect program stripped — localizing the snarkVM function that emits the stack error and
+   *      which program is missing, and revealing whether the real failure is local-verify or node-side.
+   * Never throws: diagnostics must not perturb the real execute/broadcast path.
+   */
+  private async logExecutionDiagnostics(
+    state: InitializedState,
+    call: { programName: string; functionName: string; inputs: string[] },
+    opts: { runVerifyProbe: boolean },
+  ): Promise<void> {
+    const { networkClient, programManager, wallet } = state;
+    const { programName, functionName, inputs } = call;
+    const tag = '[aleo-debug]';
+    const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    const importLines = (src: string): string[] =>
+      src
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith('import '));
+    const deploymentStatus = async (id: string): Promise<string> => {
+      try {
+        const src = await networkClient.getProgram(id);
+        return `DEPLOYED (${src.length} chars)`;
+      } catch (e) {
+        return `NOT DEPLOYED / fetch failed: ${errMsg(e)}`;
+      }
+    };
+
+    try {
+      console.log(`\n${tag} ───────── Aleo execution diagnostics ─────────`);
+      console.log(`${tag} program : ${programName}`);
+      console.log(`${tag} function: ${functionName}`);
+      console.log(`${tag} inputs  :`, inputs);
+
+      // Captured for reuse by the Layer-2 verify probe (step 5).
+      let rootSource: string | undefined;
+      let importMap: Record<string, string> = {};
+
+      // 1. Root program source + declared imports.
+      try {
+        rootSource = await networkClient.getProgram(programName);
+        console.log(`${tag} root program DEPLOYED (source ${rootSource.length} chars)`);
+        console.log(`${tag} root declared imports:`, importLines(rootSource));
+      } catch (e) {
+        console.log(`${tag} ⚠ root program fetch failed: ${errMsg(e)}`);
+      }
+
+      // 2. Direct + transitive import map, with per-program on-chain deployment status.
+      try {
+        const direct = await networkClient.getProgramImportNames(programName);
+        console.log(`${tag} direct import names:`, direct);
+      } catch (e) {
+        console.log(`${tag} ⚠ getProgramImportNames failed: ${errMsg(e)}`);
+      }
+      try {
+        importMap = (await networkClient.getProgramImports(programName)) as Record<string, string>;
+        const ids = Object.keys(importMap);
+        console.log(`${tag} transitive imports resolved (${ids.length}):`, ids);
+        for (const id of ids) {
+          const src = importMap[id] ?? '';
+          console.log(`${tag}   • ${id} — supplied source ${src.length} chars — on-chain: ${await deploymentStatus(id)}`);
+          const declared = importLines(src);
+          if (declared.length > 0) console.log(`${tag}       declares:`, declared);
+        }
+        if (!ids.some((id) => id.includes('gmp_lib'))) {
+          console.log(`${tag} ⚠ no gmp_lib_* program in the resolved import map — consistent with the "Missing stack" error`);
+        }
+      } catch (e) {
+        console.log(`${tag} ⚠ getProgramImports failed: ${errMsg(e)}`);
+      }
+
+      // 3. Static call graph by declared imports (cycle-guarded).
+      console.log(`${tag} static call graph (by declared imports):`);
+      const visited = new Set<string>();
+      const walk = async (id: string, depth: number): Promise<void> => {
+        const indent = '  '.repeat(depth);
+        const marker = depth === 0 ? '◆' : '└─';
+        if (visited.has(id)) {
+          console.log(`${tag} ${indent}${marker} ${id} (already expanded)`);
+          return;
+        }
+        visited.add(id);
+        let names: string[] = [];
+        try {
+          names = await networkClient.getProgramImportNames(id);
+        } catch (e) {
+          console.log(`${tag} ${indent}${marker} ${id} ⚠ imports unavailable: ${errMsg(e)}`);
+          return;
+        }
+        console.log(`${tag} ${indent}${marker} ${id}${names.length === 0 ? ' (leaf)' : ''}`);
+        for (const name of names) await walk(name, depth + 1);
+      };
+      await walk(programName, 0);
+
+      // 4. Actual transition trace via a local authorization (PK path only — needs the signing key).
+      if (isPkAleoWallet(wallet)) {
+        console.log(`${tag} building local authorization to capture the actual transition trace…`);
+        try {
+          const authorization = await programManager.buildAuthorization({ programName, functionName, inputs });
+          const transitions = (authorization.transitions() ?? []) as Array<{
+            programId?: () => string;
+            functionName?: () => string;
+            id?: () => string;
+          }>;
+          console.log(`${tag} ✅ authorization built — ${transitions.length} transition(s) in call-graph order:`);
+          transitions.forEach((t, i) => {
+            const pid = typeof t.programId === 'function' ? t.programId() : '?';
+            const fn = typeof t.functionName === 'function' ? t.functionName() : '?';
+            const tid = typeof t.id === 'function' ? t.id() : '?';
+            console.log(`${tag}   #${i}  ${pid} / ${fn}   (${tid})`);
+          });
+        } catch (e) {
+          console.log(`${tag} ❌ buildAuthorization FAILED — local synthesis stopped here:`);
+          console.log(`${tag}    ${errMsg(e)}`);
+          console.log(
+            `${tag}    → call graph could not be resolved locally; the program named above is the missing stack`,
+          );
+        }
+      } else {
+        console.log(`${tag} (browser wallet — skipping local authorization probe; no signing key in ProgramManager)`);
+      }
+
+      // 5. Layer-2 verify probe (ALEO_DEBUG_VERIFY=1, PK path only). Locally prove, then call
+      // `verifyExecution` (= snarkVM `Process::verify_execution`) with and without the suspect program to
+      // localize the function that emits the stack error and confirm which program is missing.
+      if (opts.runVerifyProbe && isPkAleoWallet(wallet)) {
+        await this.runVerifyProbe(state, { programName, functionName, inputs }, { rootSource, importMap, tag, errMsg });
+      } else if (opts.runVerifyProbe) {
+        console.log(`${tag} (browser wallet — skipping Layer-2 verify probe; no signing key in ProgramManager)`);
+      }
+
+      console.log(`${tag} ──────────────────────────────────────────────\n`);
+    } catch (e) {
+      console.log(`${tag} diagnostics aborted: ${errMsg(e)}`);
+    }
+  }
+
+  /**
+   * Layer-2 verify probe (see logExecutionDiagnostics step 5). Locally proves the execution, then runs
+   * snarkVM's verification (`ProgramManager.verifyExecution` → `Process::verify_execution`) twice:
+   *   (a) with the full import set, and
+   *   (b) with every gmp_lib_* program stripped from the import set.
+   * The stripped run is expected to throw the same stack error as the broadcast node — reproducing it
+   * inside the verify function and naming the missing program. Comparing (a) and the real 500 reveals
+   * whether the failure is local-verify (we reproduce it) or node-side (local verify passes, node still
+   * fails — meaning the node's process never loaded the program, e.g. not finalized / not carried in the
+   * tx). Verifying keys for the pass case are not assembled here; if (a) fails past the stack lookup with a
+   * "verifying key" error, that itself confirms the stack lookup succeeded. Never throws.
+   */
+  private async runVerifyProbe(
+    state: InitializedState,
+    call: { programName: string; functionName: string; inputs: string[] },
+    ctx: {
+      rootSource: string | undefined;
+      importMap: Record<string, string>;
+      tag: string;
+      errMsg: (e: unknown) => string;
+    },
+  ): Promise<void> {
+    const { networkClient, programManager } = state;
+    const { functionName, inputs } = call;
+    const { rootSource, importMap, tag, errMsg } = ctx;
+
+    console.log(`${tag} ─── Layer-2 verify probe (local prove → verifyExecution) ───`);
+    if (!rootSource) {
+      console.log(`${tag} ⚠ no root program source available — skipping verify probe`);
+      return;
+    }
+
+    let blockHeight: number;
+    try {
+      blockHeight = await networkClient.getLatestHeight();
+      console.log(`${tag} latest block height: ${blockHeight}`);
+    } catch (e) {
+      console.log(`${tag} ⚠ getLatestHeight failed (${errMsg(e)}) — skipping verify probe (height affects consensus checks)`);
+      return;
+    }
+
+    // Local prove. If this throws, the error surfaces in EXECUTE/synthesis, not verification.
+    let response: Awaited<ReturnType<typeof programManager.run>>;
+    try {
+      console.log(`${tag} proving execution locally via ProgramManager.run (this can take a while)…`);
+      response = await programManager.run(rootSource, functionName, inputs, true, importMap);
+      const transitions = (response.getExecution()?.transitions() ?? []) as Array<{
+        programId?: () => string;
+        functionName?: () => string;
+      }>;
+      console.log(`${tag} ✅ proved — execution has ${transitions.length} transition(s):`);
+      transitions.forEach((t, i) => {
+        const pid = typeof t.programId === 'function' ? t.programId() : '?';
+        const fn = typeof t.functionName === 'function' ? t.functionName() : '?';
+        console.log(`${tag}   #${i}  ${pid} / ${fn}`);
+      });
+    } catch (e) {
+      console.log(`${tag} ❌ ProgramManager.run failed — the stack error surfaces in EXECUTE/synthesis (not verify):`);
+      console.log(`${tag}    ${errMsg(e)}`);
+      return;
+    }
+
+    // (a) Verify with the full import set.
+    try {
+      const ok = programManager.verifyExecution(response, blockHeight, importMap);
+      console.log(`${tag} (a) verifyExecution(full imports) → ${ok}`);
+      console.log(
+        `${tag}     → local verify ${ok ? 'PASSES' : 'returns false'}; if the broadcast node still 500s, the missing stack is node-side (program not loaded/finalized on the node, or not carried in the tx)`,
+      );
+    } catch (e) {
+      const msg = errMsg(e);
+      console.log(`${tag} (a) verifyExecution(full imports) threw: ${msg}`);
+      if (/verifying key/i.test(msg)) {
+        console.log(`${tag}     → past the stack lookup (this is a verifying-key error, not a missing-stack); stack resolution succeeded`);
+      }
+    }
+
+    // (b) Verify with every gmp_lib_* program stripped — reproduce the missing-stack inside verify.
+    const stripped: Record<string, string> = { ...importMap };
+    const removed = Object.keys(stripped).filter((k) => k.includes('gmp_lib'));
+    for (const k of removed) delete stripped[k];
+    const label = removed.length > 0 ? removed.join(', ') : 'gmp_lib_* (none present to strip)';
+    try {
+      const ok = programManager.verifyExecution(response, blockHeight, stripped);
+      console.log(`${tag} (b) verifyExecution(without ${label}) → ${ok} (unexpected: no stack error raised)`);
+    } catch (e) {
+      console.log(`${tag} ✅ (b) reproduced in the verify path — verifyExecution(without ${label}) threw:`);
+      console.log(`${tag}    ${errMsg(e)}`);
+      console.log(
+        `${tag}    → this is snarkVM Process::verify_execution → get_stack/get_external_stack; the named program is the missing stack`,
+      );
+    }
   }
 
   async waitForTransactionReceipt(

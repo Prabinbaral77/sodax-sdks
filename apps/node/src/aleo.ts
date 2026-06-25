@@ -28,20 +28,28 @@ const PROVABLE_CONSUMER_ID = process.env.PROVABLE_CONSUMER_ID;
 const HUB_RPC_URL = process.env.HUB_RPC_URL || 'https://rpc.soniclabs.com';
 const RELAYER_API_ENDPOINT = process.env.RELAYER_API_ENDPOINT as HttpUrl | undefined;
 
+// Set ALEO_LOCAL_PROVE=1 to prove locally (no remote DPS prover) and isolate
+// delegate-side failures like "Missing stack for program '…'".
+const ALEO_LOCAL_PROVE = process.env.ALEO_LOCAL_PROVE === '1' || process.env.ALEO_LOCAL_PROVE === 'true';
+
 if (!ALEO_PRIVATE_KEY) throw new Error('ALEO_PRIVATE_KEY is required');
 if (!ALEO_PRIVATE_KEY.startsWith('APrivateKey1')) throw new Error('Invalid ALEO_PRIVATE_KEY');
-if (!PROVABLE_API_KEY) throw new Error('PROVABLE_API_KEY is required');
-if (!PROVABLE_CONSUMER_ID) throw new Error('PROVABLE_CONSUMER_ID is required');
+
+// When ALEO_LOCAL_PROVE is set, omit `delegate` so execute() proves locally
+// via programManager.execute instead of submitting to the remote prover.
+function buildDelegateConfig(): { apiKey: string; consumerId: string } | undefined {
+  if (ALEO_LOCAL_PROVE) return undefined;
+  if (!PROVABLE_API_KEY) throw new Error('PROVABLE_API_KEY is required');
+  if (!PROVABLE_CONSUMER_ID) throw new Error('PROVABLE_CONSUMER_ID is required');
+  return { apiKey: PROVABLE_API_KEY, consumerId: PROVABLE_CONSUMER_ID };
+}
 
 const aleoWalletProvider = new AleoWalletProvider({
   type: 'privateKey',
   rpcUrl: ALEO_RPC_URL,
   privateKey: ALEO_PRIVATE_KEY,
   network: 'mainnet',
-  delegate: {
-    apiKey: PROVABLE_API_KEY,
-    consumerId: PROVABLE_CONSUMER_ID,
-  },
+  delegate: buildDelegateConfig(),
 });
 
 const sodaxConfigOverrides: DeepPartial<SodaxConfig> = {
