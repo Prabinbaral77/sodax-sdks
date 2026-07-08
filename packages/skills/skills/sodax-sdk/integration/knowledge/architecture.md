@@ -137,13 +137,13 @@ new Sodax(config?: SodaxOptions): Sodax;
 
 `SodaxDefaultConfig` has exactly **10 fields** (all required at the type level, but `DeepPartial` makes every leaf optional):
 
-- `chains: Record<SpokeChainKey, SpokeChainConfig>` — per-spoke-chain config. Each entry carries `rpcUrl`, polling config, and chain-family-specific extras (`BitcoinSpokeChainConfig`, `StellarSpokeChainConfig`, etc.).
+- `chains: Record<SpokeChainKey, SpokeChainConfig>` — per-spoke-chain config. Each entry carries `rpcUrl`, polling config, and chain-family-specific extras (`BitcoinSpokeChainConfig`, `StellarSpokeChainConfig`, etc.). EVM hub/Sonic entries also accept an optional `rpcUrls` failover list (see [`recipes/initialize-sodax.md`](recipes/initialize-sodax.md)).
 - `swaps: SwapsConfig` — supported solver tokens per chain (+ optional per-feature `partnerFee` override).
 - `moneyMarket: MoneyMarketConfig` — money market contracts + supported tokens (+ optional per-feature `partnerFee` override).
 - `bridge: BridgeConfig` — bridge `{ partnerFee }` override.
 - `dex: DexConfig` — DEX pool/asset config.
 - `leverageYield: LeverageYieldConfig` — registry of leverage-yield ERC-4626 vaults on the hub.
-- `hub: HubConfig` — hub-chain (Sonic) full address map + RPC URL + polling config.
+- `hub: HubConfig` — hub-chain (Sonic) full address map + RPC URL + polling config. Accepts an optional `rpcUrls` failover list (and `rpcOptions` tuning) — see [`recipes/initialize-sodax.md`](recipes/initialize-sodax.md).
 - `api: ApiConfig` — backend API config: flat `BaseApiConfig` (`{ baseURL, timeout, headers }`, shared by `sodax.backendApi` and the swaps client `sodax.api.swaps`) or nested `CustomApiConfig` (`{ baseApiConfig?, swapsApiConfig? }`) to point the swaps API at its own endpoint.
 - `solver: SolverConfig` — `{ intentsContract, solverApiEndpoint, protocolIntentsContract }`.
 - `relay: RelayConfig` — intent relay endpoint + chain-id map.
