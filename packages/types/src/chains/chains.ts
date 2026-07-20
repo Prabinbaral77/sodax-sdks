@@ -3,7 +3,7 @@
  * Forbidden to import types from other packages in this file (exception for shared types)!
  */
 
-import type { Address, Hex, TxPollingConfig } from '../shared/shared.js';
+import type { Address, Hex, RpcFailoverConfig, TxPollingConfig } from '../shared/shared.js';
 import {
   sonicSupportedTokens,
   redbellySupportedTokens,
@@ -25,6 +25,7 @@ import {
   ethereumSupportedTokens,
   kaiaSupportedTokens,
   stacksSupportedTokens,
+  hederaSupportedTokens,
   aleoSupportedTokens,
 } from './tokens.js';
 
@@ -54,15 +55,26 @@ export const RelayChainIdMap = {
   [ChainKeys.REDBELLY_MAINNET]: 726564n,
   [ChainKeys.KAIA_MAINNET]: 27489n,
   [ChainKeys.STACKS_MAINNET]: 60n,
+  [ChainKeys.HEDERA_MAINNET]: 18501n,
   [ChainKeys.ALEO_MAINNET]: 6694886634401n,
 } as const satisfies Record<ChainKey, bigint>;
 
 export type IntentChainId = (typeof RelayChainIdMap)[keyof typeof RelayChainIdMap];
 export const INTENT_CHAIN_IDS = Object.values(RelayChainIdMap);
 
-export const IntentRelayChainIdToChainKey: Map<IntentRelayChainId, ChainKey> = Object.fromEntries(
-  Object.entries(RelayChainIdMap).map(([chainKey, chainId]) => [chainId, chainKey]),
+export const IntentRelayChainIdToChainKey = new Map<IntentRelayChainId, ChainKey>(
+  Object.entries(RelayChainIdMap).map(([chainKey, chainId]) => [chainId, chainKey as ChainKey]),
 );
+
+/**
+ * Base URL for default chain logos hosted in the `@sodax/assets` package.
+ * Each logo is served from `main` via raw.githubusercontent and named by its
+ * `ChainKeys` value, so the full URL is `${CHAIN_LOGO_BASE_URL}/<chainKey>.png`.
+ */
+export const CHAIN_LOGO_BASE_URL =
+  'https://raw.githubusercontent.com/icon-project/sodax-sdks/main/packages/assets/chain';
+
+const chainLogo = (key: ChainKey): string => `${CHAIN_LOGO_BASE_URL}/${key}.png`;
 
 export const baseChainInfo = {
   [ChainKeys.SONIC_MAINNET]: {
@@ -71,6 +83,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 146,
     mainnet: true,
+    logo: chainLogo(ChainKeys.SONIC_MAINNET),
     explorer: {
       baseUrl: 'https://sonicscan.org/',
       txUrl: 'https://sonicscan.org/tx/',
@@ -84,6 +97,7 @@ export const baseChainInfo = {
     type: 'SOLANA',
     chainId: 'solana',
     mainnet: true,
+    logo: chainLogo(ChainKeys.SOLANA_MAINNET),
     explorer: {
       baseUrl: 'https://solscan.io/',
       txUrl: 'https://solscan.io/tx/',
@@ -97,6 +111,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 43_114,
     mainnet: true,
+    logo: chainLogo(ChainKeys.AVALANCHE_MAINNET),
     explorer: {
       baseUrl: 'https://snowtrace.io/',
       txUrl: 'https://snowtrace.io/tx/',
@@ -110,6 +125,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 42_161,
     mainnet: true,
+    logo: chainLogo(ChainKeys.ARBITRUM_MAINNET),
     explorer: {
       baseUrl: 'https://arbiscan.io/',
       txUrl: 'https://arbiscan.io/tx/',
@@ -123,6 +139,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 8453,
     mainnet: true,
+    logo: chainLogo(ChainKeys.BASE_MAINNET),
     explorer: {
       baseUrl: 'https://basescan.org/',
       txUrl: 'https://basescan.org/tx/',
@@ -136,6 +153,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 10,
     mainnet: true,
+    logo: chainLogo(ChainKeys.OPTIMISM_MAINNET),
     explorer: {
       baseUrl: 'https://optimistic.etherscan.io/',
       txUrl: 'https://optimistic.etherscan.io/tx/',
@@ -149,6 +167,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 56,
     mainnet: true,
+    logo: chainLogo(ChainKeys.BSC_MAINNET),
     explorer: {
       baseUrl: 'https://bscscan.com/',
       txUrl: 'https://bscscan.com/tx/',
@@ -162,6 +181,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 137,
     mainnet: true,
+    logo: chainLogo(ChainKeys.POLYGON_MAINNET),
     explorer: {
       baseUrl: 'https://polygonscan.com/',
       txUrl: 'https://polygonscan.com/tx/',
@@ -175,6 +195,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 999,
     mainnet: true,
+    logo: chainLogo(ChainKeys.HYPEREVM_MAINNET),
     explorer: {
       baseUrl: 'https://hyperevmscan.io/',
       txUrl: 'https://hyperevmscan.io/tx/',
@@ -188,6 +209,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 1890,
     mainnet: true,
+    logo: chainLogo(ChainKeys.LIGHTLINK_MAINNET),
     explorer: {
       baseUrl: 'https://phoenix.lightlink.io/',
       txUrl: 'https://phoenix.lightlink.io/tx/',
@@ -201,6 +223,7 @@ export const baseChainInfo = {
     type: 'INJECTIVE',
     chainId: 'injective-1',
     mainnet: true,
+    logo: chainLogo(ChainKeys.INJECTIVE_MAINNET),
     explorer: {
       baseUrl: 'https://www.mintscan.io/injective/',
       txUrl: 'https://www.mintscan.io/injective/tx/',
@@ -214,6 +237,7 @@ export const baseChainInfo = {
     type: 'STELLAR',
     chainId: 'stellar',
     mainnet: true,
+    logo: chainLogo(ChainKeys.STELLAR_MAINNET),
     explorer: {
       baseUrl: 'https://stellar.expert/explorer/public/',
       txUrl: 'https://stellar.expert/explorer/public/tx/',
@@ -227,6 +251,7 @@ export const baseChainInfo = {
     type: 'SUI',
     chainId: 'sui',
     mainnet: true,
+    logo: chainLogo(ChainKeys.SUI_MAINNET),
     explorer: {
       baseUrl: 'https://suivision.xyz/',
       txUrl: 'https://suivision.xyz/txblock/',
@@ -240,6 +265,7 @@ export const baseChainInfo = {
     type: 'ICON',
     chainId: '0x1.icon',
     mainnet: true,
+    logo: chainLogo(ChainKeys.ICON_MAINNET),
     explorer: {
       baseUrl: 'https://tracker.icon.community/',
       txUrl: 'https://tracker.icon.community/transaction/',
@@ -253,6 +279,7 @@ export const baseChainInfo = {
     type: 'NEAR',
     chainId: 'near',
     mainnet: true,
+    logo: chainLogo(ChainKeys.NEAR_MAINNET),
     explorer: {
       baseUrl: 'https://nearblocks.io/',
       txUrl: 'https://nearblocks.io/txns/',
@@ -266,6 +293,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 1,
     mainnet: true,
+    logo: chainLogo(ChainKeys.ETHEREUM_MAINNET),
     explorer: {
       baseUrl: 'https://etherscan.io/',
       txUrl: 'https://etherscan.io/tx/',
@@ -279,6 +307,7 @@ export const baseChainInfo = {
     type: 'BITCOIN',
     chainId: 'bitcoin',
     mainnet: true,
+    logo: chainLogo(ChainKeys.BITCOIN_MAINNET),
     explorer: {
       baseUrl: 'https://mempool.space/',
       txUrl: 'https://mempool.space/tx/',
@@ -292,6 +321,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 151,
     mainnet: true,
+    logo: chainLogo(ChainKeys.REDBELLY_MAINNET),
     explorer: {
       baseUrl: 'https://redbelly.routescan.io/',
       txUrl: 'https://redbelly.routescan.io/tx/',
@@ -305,6 +335,7 @@ export const baseChainInfo = {
     type: 'EVM',
     chainId: 8217,
     mainnet: true,
+    logo: chainLogo(ChainKeys.KAIA_MAINNET),
     explorer: {
       baseUrl: 'https://klaytnfinder.io/',
       txUrl: 'https://klaytnfinder.io/tx/',
@@ -318,11 +349,26 @@ export const baseChainInfo = {
     type: 'STACKS',
     chainId: 'stacks',
     mainnet: true,
+    logo: chainLogo(ChainKeys.STACKS_MAINNET),
     explorer: {
       baseUrl: 'https://explorer.hiro.so/',
       txUrl: 'https://explorer.hiro.so/txid/',
       addressUrl: 'https://explorer.hiro.so/address/',
       contractUrl: 'https://explorer.hiro.so/txid/',
+    },
+  },
+  [ChainKeys.HEDERA_MAINNET]: {
+    name: 'Hedera',
+    key: ChainKeys.HEDERA_MAINNET,
+    type: 'EVM',
+    chainId: 295,
+    mainnet: true,
+    logo: chainLogo(ChainKeys.HEDERA_MAINNET),
+    explorer: {
+      baseUrl: 'https://hashscan.io/mainnet/',
+      txUrl: 'https://hashscan.io/mainnet/transaction/',
+      addressUrl: 'https://hashscan.io/mainnet/account/',
+      contractUrl: 'https://hashscan.io/mainnet/contract/',
     },
   },
   [ChainKeys.ALEO_MAINNET]: {
@@ -331,6 +377,7 @@ export const baseChainInfo = {
     type: 'ALEO',
     chainId: 'aleo',
     mainnet: true,
+    logo: chainLogo(ChainKeys.ALEO_MAINNET),
     explorer: {
       baseUrl: 'https://explorer.provable.com/',
       txUrl: 'https://explorer.provable.com/transaction/',
@@ -411,6 +458,8 @@ export type BaseChainInfo<T extends ChainType> = {
   chainId: string | number;
   type: T;
   mainnet: boolean;
+  /** Default chain logo URL (hosted in @sodax/assets, see CHAIN_LOGO_BASE_URL). */
+  logo: string;
   explorer: {
     baseUrl: string;
     txUrl: string;
@@ -437,7 +486,8 @@ export type HubConfig = {
   nativeToken: Address;
   wrappedNativeToken: Address;
   rpcUrl: string;
-} & BaseSpokeChainConfig<'EVM'>;
+} & BaseSpokeChainConfig<'EVM'> &
+  RpcFailoverConfig;
 
 export type EvmSpokeChainConfig = BaseSpokeChainConfig<'EVM'> & {
   addresses: {
@@ -455,7 +505,7 @@ export type SonicSpokeChainConfig = BaseSpokeChainConfig<'EVM'> & {
   };
   nativeToken: Address;
   rpcUrl: string;
-};
+} & RpcFailoverConfig;
 
 export type SolanaChainConfig = BaseSpokeChainConfig<'SOLANA'> & {
   addresses: {
@@ -998,6 +1048,21 @@ export const spokeChainConfig = {
       maxTimeoutMs: 120_000,
     },
   } as const satisfies StacksSpokeChainConfig,
+  [ChainKeys.HEDERA_MAINNET]: {
+    chain: baseChainInfo[ChainKeys.HEDERA_MAINNET] satisfies BaseChainInfo<'EVM'>,
+    rpcUrl: 'https://mainnet.hashio.io/api',
+    addresses: {
+      assetManager: '0x0df73542cC68bDC01b361d231c60F726B0e0bC05',
+      connection: '0x4555aC13D7338D9E671584C1D118c06B2a3C88eD',
+    },
+    nativeToken: '0x0000000000000000000000000000000000000000' as const,
+    bnUSD: '0x0000000000000000000000000000000000a0286a',
+    supportedTokens: hederaSupportedTokens,
+    pollingConfig: {
+      pollingIntervalMs: 2000,
+      maxTimeoutMs: 60_000,
+    },
+  } as const satisfies EvmSpokeChainConfig,
   [ChainKeys.ALEO_MAINNET]: {
     chain: baseChainInfo[ChainKeys.ALEO_MAINNET] satisfies BaseChainInfo<'ALEO'>,
     addresses: {

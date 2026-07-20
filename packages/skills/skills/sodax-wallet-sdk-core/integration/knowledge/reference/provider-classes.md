@@ -5,7 +5,7 @@ One row per chain. Use this when you know the chain and need to look up everythi
 | Chain | Class | Config union | Interface (`@sodax/types`) | Default merge helper | Discriminant |
 |---|---|---|---|---|---|
 | EVM       | `EvmWalletProvider`       | `EvmWalletConfig`       | `IEvmWalletProvider`       | `mergePolicy` (per-method)   | Field presence (no `type`) |
-| Solana    | `SolanaWalletProvider`    | `SolanaWalletConfig`    | `ISolanaWalletProvider`    | `mergePolicy` (per-method)   | Field presence (no `type`) |
+| Solana    | `SolanaWalletProvider`    | `SolanaWalletConfig`    | `ISolanaWalletProvider`    | flat (read directly)         | Field presence (no `type`) |
 | Sui       | `SuiWalletProvider`       | `SuiWalletConfig`       | `ISuiWalletProvider`       | `mergePolicy` (per-method)   | Field presence — uses `mnemonics` |
 | Bitcoin   | `BitcoinWalletProvider`   | `BitcoinWalletConfig`   | `IBitcoinWalletProvider`   | `mergeDefaults` (flat)       | **`type` field** (`'PRIVATE_KEY' \| 'BROWSER_EXTENSION'`) |
 | Stellar   | `StellarWalletProvider`   | `StellarWalletConfig`   | `IStellarWalletProvider`   | `mergeDefaults` (flat)       | **`type` field** |
@@ -15,7 +15,7 @@ One row per chain. Use this when you know the chain and need to look up everythi
 | Stacks    | `StacksWalletProvider`    | `StacksWalletConfig`    | `IStacksWalletProvider`    | `mergeDefaults` (flat)       | Field presence (no `type`) |
 | Aleo      | `AleoWalletProvider`      | `AleoWalletConfig`      | `IAleoWalletProvider`      | `mergePolicy` (`waitForReceipt`) | **`type` field** (`'privateKey' \| 'browserExtension'`) |
 
-> EVM, Solana, and Sui group their `defaults` per method (e.g. `defaults.sendTransaction`, `defaults.signAndExecuteTxn`). Aleo is mixed — `defaults.waitForReceipt` is a per-method slice (`mergePolicy`) while `priorityFee` / `privateFee` are read flat. Every other chain has a flat `defaults` object. See [`../architecture.md`](../architecture.md) § `BaseWalletProvider`.
+> EVM and Sui group their `defaults` per method (e.g. `defaults.sendTransaction`, `defaults.signAndExecuteTxn`) via `mergePolicy`. Aleo is mixed — `defaults.waitForReceipt` is a per-method slice (`mergePolicy`) while `priorityFee` / `privateFee` are read flat. Every other chain (incl. Solana) has a flat `defaults` object. See [`../architecture.md`](../architecture.md) § `BaseWalletProvider`.
 
 ---
 

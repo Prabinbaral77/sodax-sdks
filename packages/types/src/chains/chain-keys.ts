@@ -35,6 +35,7 @@ export const ChainKeys = {
   REDBELLY_MAINNET: 'redbelly',
   KAIA_MAINNET: '0x2019.kaia',
   STACKS_MAINNET: 'stacks',
+  HEDERA_MAINNET: 'hedera',
   ALEO_MAINNET: 'aleo',
 } as const;
 

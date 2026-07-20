@@ -4,7 +4,7 @@ Chain families and spoke chain keys this package can sign for. Keys live in `@so
 
 ---
 
-## EVM (one provider, 12 chains)
+## EVM (one provider, 13 chains)
 
 `EvmWalletProvider` covers every EVM spoke chain via `getEvmViemChain()`. The provider is exhaustive — adding a new `EvmChainKey` to `@sodax/types` requires updating `getEvmViemChain` (caught at compile time via a `never` assertion in the default branch).
 
@@ -22,6 +22,7 @@ Chain families and spoke chain keys this package can sign for. Keys live in `@so
 | `ChainKeys.LIGHTLINK_MAINNET` | `lightlinkPhoenix` |
 | `ChainKeys.REDBELLY_MAINNET` | `redbellyMainnet` |
 | `ChainKeys.KAIA_MAINNET` | `kaia` |
+| `ChainKeys.HEDERA_MAINNET` | `hedera` |
 
 ---
 
@@ -39,7 +40,7 @@ Chain families and spoke chain keys this package can sign for. Keys live in `@so
 | Stacks    | `StacksWalletProvider`    | `ChainKeys.STACKS_MAINNET` |
 | Aleo      | `AleoWalletProvider`      | `ChainKeys.ALEO_MAINNET` |
 
-> 21 spoke chains total = 12 EVM + 9 non-EVM. The hub chain (Sonic) is counted with EVM.
+> 22 spoke chains total = 13 EVM + 9 non-EVM. The hub chain (Sonic) is counted with EVM.
 
 ---
 
