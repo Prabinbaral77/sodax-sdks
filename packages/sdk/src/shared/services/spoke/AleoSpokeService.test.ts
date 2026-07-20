@@ -185,8 +185,8 @@ describe('AleoSpokeService.deposit', () => {
       const tx = await aleoSpoke.deposit(depositParams<true>({ raw: true, token: ALEO_NATIVE_TOKEN }));
 
       expect(tx.data.functionName).toBe('transfer_native_public');
-      // The public branch always prepends the token field — token field + 7 common inputs.
-      expect(tx.data.inputs).toHaveLength(8);
+      // Native public takes no token field — just the 7 common inputs.
+      expect(tx.data.inputs).toHaveLength(7);
     });
   });
 

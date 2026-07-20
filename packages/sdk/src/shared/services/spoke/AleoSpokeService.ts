@@ -145,12 +145,14 @@ export class AleoSpokeService {
     const hubChainId = BigInt(getIntentRelayChainId(ChainKeys.SONIC_MAINNET));
     const hubAddress = this.config.getHubChainConfig().addresses.assetManager;
 
+    // Native transitions take fee_amount as u64; token transitions take it as u128.
+    const feeType = isNative ? 'u64' : 'u128';
     const commonInputs: string[] = [
       hexToAleoU8Array(recipient),
       formatAleoInput(params.amount, 'u64'),
       formatAleoInput(connSn, 'u128'),
       hexToAleoU8Array(dataHash),
-      formatAleoInput(feeAmount, 'u64'),
+      formatAleoInput(feeAmount, feeType),
       formatAleoInput(hubChainId, 'u128'),
       hexToAleoU8Array(hubAddress),
     ];
@@ -171,8 +173,9 @@ export class AleoSpokeService {
       functionName = isNative ? 'transfer_native_private' : 'transfer_token_private';
       inputs = [aleoRecord, ...commonInputs, aleoFallbackRecipient];
     } else {
+      // transfer_native_public takes no token field; transfer_token_public prepends it.
       functionName = isNative ? 'transfer_native_public' : 'transfer_token_public';
-      inputs = [formatAleoInput(tokenField, 'field'), ...commonInputs];
+      inputs = isNative ? commonInputs : [formatAleoInput(tokenField, 'field'), ...commonInputs];
     }
 
     const executeParams: AleoExecuteOptions = {

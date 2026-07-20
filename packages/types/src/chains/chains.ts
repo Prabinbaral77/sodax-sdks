@@ -1001,10 +1001,10 @@ export const spokeChainConfig = {
   [ChainKeys.ALEO_MAINNET]: {
     chain: baseChainInfo[ChainKeys.ALEO_MAINNET] satisfies BaseChainInfo<'ALEO'>,
     addresses: {
-      assetManager: 'asset_manager_core_v1.aleo',
-      connection: 'connection_v1.aleo',
+      assetManager: 'gmp_asset_manager_core_v02.aleo',
+      connection: 'gmp_connection_v02.aleo',
       xTokenManager: '',
-      rateLimit: 'rate_limit_v1.aleo',
+      rateLimit: 'gmp_rate_limit_v02.aleo',
       creditsProgram: 'credits.aleo',
       tokenRegistry: 'token_registry.aleo',
     },
