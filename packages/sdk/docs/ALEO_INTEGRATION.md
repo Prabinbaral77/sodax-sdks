@@ -37,8 +37,8 @@ Aleo plugs into v2 the same way Near does:
 - New constants: `ALEO_CHAIN_KEYS`, `ALEO_CHAIN_KEYS_SET`.
 - Added Aleo to the `SpokeChainConfig` union and to `GetSpokeChainConfigType`.
 - Added Aleo entry to `spokeChainConfig` with mainnet program IDs:
-  `asset_manager_core_v1.aleo`, `connection_v1.aleo`, `rate_limit_v1.aleo`,
-  `credits.aleo`, `token_registry.aleo`.
+  `gmp_asset_manager_core_v02.aleo`, `gmp_connection_v02.aleo`,
+  `gmp_rate_limit_v02.aleo`, `credits.aleo`, `token_registry.aleo`.
 
 ### `src/chains/tokens.ts`
 - New `aleoSupportedTokens` with the `ALEO` native token (`decimals: 6`,
@@ -60,7 +60,7 @@ Aleo plugs into v2 the same way Near does:
 - `RawTxReturnType` and `TxReturnType` extended with the `'ALEO'` branch
   (`AleoReturnType<Raw>` / `AleoRawTransaction`).
 - `GetEstimateGasReturnType` extended with `'ALEO' → AleoGasEstimate`
-  (`= bigint | number`).
+  (`= bigint`).
 - New `AleoGasEstimate` export.
 - `GetTokenAddressType` and `GetAddressType` keep `string` for ALEO via
   the default branch.
@@ -109,11 +109,18 @@ Aleo plugs into v2 the same way Near does:
 ### `src/shared/services/spoke/index.ts`
 - Re-exports `AleoSpokeService.js`.
 
+### `src/shared/utils/aleo-utils.ts` (new file)
+- `isValidAleoAddress` + `aleoAddressToHex` — the single validated
+  address-decode path (prefix/length guard, then bech32m decode → reversed
+  bytes → hex). Shared by `AleoSpokeService.encodeAleoAddress` and
+  `encodeAddress`; the guard rejects checksum-valid non-address bech32m
+  strings (tx ids, private keys, records).
+
 ### `src/shared/utils/shared-utils.ts`
-- Added `case 'ALEO':` to `encodeAddress` — bech32m decode → reversed bytes
-  → hex (matches the on-chain field encoding the Aleo program expects).
-- The `reverseEncodeAddress` ALEO branch returns the native `aleo1…` bech32m
-  string.
+- Added `case 'ALEO':` to `encodeAddress` — delegates to `aleoAddressToHex`
+  (matches the on-chain field encoding the Aleo program expects).
+- The `reverseEncodeAddress` ALEO branch throws — reverse-decoding an Aleo
+  address from its raw hex form is not supported.
 
 ### `src/shared/guards.ts`
 - New `isAleoChainKeyType(chainKey)` runtime guard.
@@ -162,8 +169,9 @@ Aleo plugs into v2 the same way Near does:
   inside the package boundary.
 
 ### `src/xchains/aleo/AleoXConnector.ts`
-- Bridges the Leo browser extension to the v2 connector contract; constructs
-  the `IAleoWalletProvider` on connect.
+- Bridges the Shield wallet extension (`ShieldWalletAdapter` from
+  `@provablehq/aleo-wallet-adaptor-shield`, registered in `AleoProvider`) to
+  the v2 connector contract; constructs the `IAleoWalletProvider` on connect.
 - Same `@/` → relative cleanup.
 
 ### `src/xchains/aleo/index.ts`
@@ -190,13 +198,6 @@ Aleo plugs into v2 the same way Near does:
 - v2 baseline + Aleo wired into the wallet-provider config and chain
   selector list. The Aleo provider follows the same `walletProviders[chainKey]`
   registration pattern as Near / Bitcoin.
-
-## apps/web
-
-- v2 baseline taken verbatim. Web app does not yet expose Aleo to end users
-  (intentional — same reasoning as commit `27f08dc7`: "remove aleo from web
-  app until SDK is published"). When the web app is ready to surface Aleo,
-  it will pick it up automatically through the registered chain key.
 
 ## What was deleted vs. kept
 

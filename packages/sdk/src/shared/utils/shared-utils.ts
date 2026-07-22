@@ -15,7 +15,7 @@ import { bcs } from '@mysten/sui/bcs';
 import { PublicKey } from '@solana/web3.js';
 import { Address as StellarAddress, xdr } from '@stellar/stellar-sdk';
 import { Cl, cvToString, deserializeCV, serializeCV } from '@sodax/libs/stacks/core';
-import { decodeBech32m } from './bech32m.js';
+import { aleoAddressToHex } from './aleo-utils.js';
 
 export async function retry<T>(
   action: (retryCount: number) => Promise<T>,
@@ -144,10 +144,8 @@ export function encodeAddress(spokeChainId: SpokeChainKey, address: string): Hex
     case 'NEAR':
     case 'INJECTIVE':
       return toHex(Buffer.from(address, 'utf-8'));
-    case 'ALEO': {
-      const { data } = decodeBech32m(address);
-      return toHex(new Uint8Array([...data].reverse()));
-    }
+    case 'ALEO':
+      return aleoAddressToHex(address);
     default: {
       const exhaustiveCheck: never = chainType;
       throw new Error(`Invalid spoke chain id: ${exhaustiveCheck}`);

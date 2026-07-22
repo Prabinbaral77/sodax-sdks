@@ -1,7 +1,7 @@
 /**
  * Tests for `decodeBech32m` — the bech32m address codec.
  *
- * `decodeBech32m` is the decoder behind `aleoAddressToHex` in AleoSpokeService: it turns an
+ * `decodeBech32m` is the decoder behind `aleoAddressToHex` in aleo-utils: it turns an
  * `aleo1…` address into the raw 32-byte payload that feeds straight into deposit/sendMessage
  * transition inputs. A malformed address that slipped past the checksum would silently corrupt
  * transaction data, so every rejection path is pinned here.

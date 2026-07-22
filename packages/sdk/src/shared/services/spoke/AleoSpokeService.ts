@@ -1,4 +1,4 @@
-import { keccak256, toHex, type Address, type Hex } from 'viem';
+import { keccak256, type Address, type Hex } from 'viem';
 import {
   type AleoChainKey,
   type AleoExecuteOptions,
@@ -22,11 +22,9 @@ import type {
 } from '../../types/spoke-types.js';
 import type { ConfigService } from '../../config/ConfigService.js';
 import { sleep } from '../../utils/shared-utils.js';
-import { decodeBech32m } from '../../utils/bech32m.js';
+import { aleoAddressToHex, isValidAleoAddress } from '../../utils/aleo-utils.js';
 
 const U64_MAX = BigInt('18446744073709551615');
-const ALEO_ADDRESS_PREFIX = 'aleo1';
-const ALEO_ADDRESS_LENGTH = 63;
 const ALEO_TX_PREFIX = 'at1';
 const ALEO_TX_LENGTH = 61;
 const ALEO_CONNSN_GENERATION_RETRIES = 3;
@@ -42,10 +40,6 @@ type AleoSDK = typeof import('@provablehq/sdk');
 function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
   if (network === 'testnet') return import('@provablehq/sdk/testnet.js') as unknown as Promise<AleoSDK>;
   return import('@provablehq/sdk/mainnet.js') as unknown as Promise<AleoSDK>;
-}
-
-function isValidAleoAddress(address: string): boolean {
-  return typeof address === 'string' && address.startsWith(ALEO_ADDRESS_PREFIX) && address.length === ALEO_ADDRESS_LENGTH;
 }
 
 function isValidAleoTransactionId(txId: string): boolean {
@@ -70,14 +64,6 @@ function hexToAleoU8Array(hex: string): string {
   return `[${Array.from(padded)
     .map(b => `${b}u8`)
     .join(', ')}]`;
-}
-
-function aleoAddressToHex(address: string): Hex {
-  if (!isValidAleoAddress(address)) {
-    throw new Error(`Invalid Aleo address: ${address}`);
-  }
-  const { data } = decodeBech32m(address);
-  return toHex(new Uint8Array([...data].reverse()));
 }
 
 export class AleoSpokeService {
