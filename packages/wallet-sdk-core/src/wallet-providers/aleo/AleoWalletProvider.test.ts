@@ -79,11 +79,17 @@ const EXECUTE_OPTIONS = {
   inputs: ['1u128', 'aleo1recipient', '0u64'],
 };
 
+/** A well-formed on-chain Aleo tx id: `at1` + 58 chars = 61. Wallets that return the id directly
+ *  return this shape; ones like Shield return a request handle instead (see BROWSER_TX_HANDLE). */
+const BROWSER_TX_ID = `at1${'x'.repeat(58)}`;
+const BROWSER_TX_HANDLE = 'shield_1784885004554_dna5ustt63';
+
 function buildAdapter(overrides: Partial<WalletAdapter> = {}): WalletAdapter {
   return {
     connected: true,
     account: { address: 'aleo1browseraddress' },
-    executeTransaction: vi.fn().mockResolvedValue({ transactionId: 'at1browsertxid' }),
+    executeTransaction: vi.fn().mockResolvedValue({ transactionId: BROWSER_TX_ID }),
+    transactionStatus: vi.fn().mockResolvedValue({ status: 'accepted', transactionId: BROWSER_TX_ID }),
     ...overrides,
   } as unknown as WalletAdapter;
 }
@@ -378,7 +384,7 @@ describe('AleoWalletProvider', () => {
 
   describe('execute — defaults merge (browser-extension)', () => {
     it('applies defaults.priorityFee in browser-extension mode', async () => {
-      const executeTransaction = vi.fn().mockResolvedValue({ transactionId: 'at1browsertxid' });
+      const executeTransaction = vi.fn().mockResolvedValue({ transactionId: BROWSER_TX_ID });
       const adapter = buildAdapter({ executeTransaction } as Partial<WalletAdapter>);
 
       const provider = new AleoWalletProvider({
@@ -441,7 +447,7 @@ describe('AleoWalletProvider', () => {
 
   describe('execute — browser-extension path', () => {
     it('forwards options to the wallet adapter', async () => {
-      const executeTransaction = vi.fn().mockResolvedValue({ transactionId: 'at1browsertxid' });
+      const executeTransaction = vi.fn().mockResolvedValue({ transactionId: BROWSER_TX_ID });
       const adapter = buildAdapter({ executeTransaction } as Partial<WalletAdapter>);
 
       const provider = new AleoWalletProvider({
@@ -459,7 +465,7 @@ describe('AleoWalletProvider', () => {
         fee: 0.01,
         privateFee: true,
       });
-      expect(result.transactionId).toBe('at1browsertxid');
+      expect(result.transactionId).toBe(BROWSER_TX_ID);
     });
 
     it('throws when the browser adapter is not connected', async () => {
@@ -470,6 +476,60 @@ describe('AleoWalletProvider', () => {
       });
 
       await expect(provider.execute(EXECUTE_OPTIONS)).rejects.toThrow('Browser wallet not connected');
+    });
+
+    // Shield returns a local request handle, not the on-chain id — proving/broadcast finish after
+    // executeTransaction resolves. Everything downstream needs the real `at1…` id.
+    it('resolves a request handle into the on-chain transaction id', async () => {
+      const transactionStatus = vi
+        .fn()
+        .mockResolvedValueOnce({ status: 'pending' })
+        .mockResolvedValueOnce({ status: 'accepted', transactionId: BROWSER_TX_ID });
+      const adapter = buildAdapter({
+        executeTransaction: vi.fn().mockResolvedValue({ transactionId: BROWSER_TX_HANDLE }),
+        transactionStatus,
+      } as Partial<WalletAdapter>);
+      const provider = new AleoWalletProvider({
+        type: 'browserExtension',
+        rpcUrl: RPC_URL,
+        provableAdapter: adapter,
+        defaults: { waitForReceipt: { checkInterval: 1, timeout: 5000 } },
+      });
+
+      const result = await provider.execute(EXECUTE_OPTIONS);
+
+      expect(transactionStatus).toHaveBeenCalledWith(BROWSER_TX_HANDLE);
+      expect(result.transactionId).toBe(BROWSER_TX_ID);
+    });
+
+    it('does not poll when the adapter already returns an on-chain id', async () => {
+      const transactionStatus = vi.fn();
+      const adapter = buildAdapter({ transactionStatus } as Partial<WalletAdapter>);
+      const provider = new AleoWalletProvider({
+        type: 'browserExtension',
+        rpcUrl: RPC_URL,
+        provableAdapter: adapter,
+      });
+
+      const result = await provider.execute(EXECUTE_OPTIONS);
+
+      expect(transactionStatus).not.toHaveBeenCalled();
+      expect(result.transactionId).toBe(BROWSER_TX_ID);
+    });
+
+    it('surfaces a wallet-side rejection instead of polling to the timeout', async () => {
+      const adapter = buildAdapter({
+        executeTransaction: vi.fn().mockResolvedValue({ transactionId: BROWSER_TX_HANDLE }),
+        transactionStatus: vi.fn().mockResolvedValue({ status: 'rejected', error: 'user declined' }),
+      } as Partial<WalletAdapter>);
+      const provider = new AleoWalletProvider({
+        type: 'browserExtension',
+        rpcUrl: RPC_URL,
+        provableAdapter: adapter,
+        defaults: { waitForReceipt: { checkInterval: 1, timeout: 5000 } },
+      });
+
+      await expect(provider.execute(EXECUTE_OPTIONS)).rejects.toThrow('rejected the transaction: user declined');
     });
 
     it('throws when the adapter returns no transactionId', async () => {

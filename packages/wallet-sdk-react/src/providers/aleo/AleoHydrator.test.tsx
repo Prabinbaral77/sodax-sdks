@@ -149,4 +149,38 @@ describe('AleoHydrator → AleoWalletProvider', () => {
     });
     expect(setRpcUrl).toHaveBeenCalledWith('https://custom.rpc/v2');
   });
+
+  // The modal renders an install CTA for connectors whose `isInstalled` is false, so a
+  // not-yet-injected wallet must still reach the store — otherwise the Aleo group renders empty.
+  it('registers connectors for wallets that are not injected yet', () => {
+    adapterState.wallet = {
+      connected: false,
+      address: null,
+      wallet: undefined,
+      wallets: [
+        { adapter: { name: 'Shield' }, readyState: 'NotDetected' },
+        { adapter: { name: 'Loadable Wallet' }, readyState: 'Loadable' },
+      ],
+    };
+
+    renderWith({ ALEO: {} });
+
+    const [chain, connectors] = setters.setXConnectors.mock.calls.at(-1) as [string, unknown[]];
+    expect(chain).toBe('ALEO');
+    expect(connectors).toHaveLength(2);
+  });
+
+  it('registers an injected wallet', () => {
+    adapterState.wallet = {
+      connected: false,
+      address: null,
+      wallet: undefined,
+      wallets: [{ adapter: { name: 'Shield' }, readyState: 'Installed' }],
+    };
+
+    renderWith({ ALEO: {} });
+
+    const [, connectors] = setters.setXConnectors.mock.calls.at(-1) as [string, unknown[]];
+    expect(connectors).toHaveLength(1);
+  });
 });

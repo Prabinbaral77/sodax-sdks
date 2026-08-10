@@ -247,6 +247,7 @@ export const swapSupportedTokens = {
   [ChainKeys.HEDERA_MAINNET]: [],
   [ChainKeys.ALEO_MAINNET]: [
     spokeChainConfig[ChainKeys.ALEO_MAINNET].supportedTokens.ALEO,
+    spokeChainConfig[ChainKeys.ALEO_MAINNET].supportedTokens.VUSDC,
   ] as const satisfies XToken[],
 } as const satisfies Record<SpokeChainKey, readonly XToken[]>;
 

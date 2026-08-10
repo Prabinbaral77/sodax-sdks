@@ -8,6 +8,7 @@ import type {
 } from '@sodax/types';
 
 import type { TransactionOptions as ProvableTransactionOptions } from '@provablehq/aleo-types';
+import type { WalletAdapter } from '@provablehq/aleo-wallet-standard';
 
 import { BaseWalletProvider } from '../BaseWalletProvider.js';
 import type {
@@ -35,8 +36,22 @@ function loadAleoSDK(network: AleoNetworkEnv): Promise<AleoSDK> {
 
 /** Priority fee for private key wallets — 0 means only the base fee (calculated by ProgramManager) */
 const DEFAULT_PK_PRIORITY_FEE = 0;
-/** Minimum fee for browser extension wallets — 0.001 ALEO to ensure transaction acceptance */
-const DEFAULT_BROWSER_FEE = 0.001;
+/**
+ * Minimum fee for browser extension wallets, in microcredits (1 ALEO = 1e6 microcredits) — the u64
+ * unit Aleo wallets expect. 1_000 == 0.001 ALEO. A fractional value here is not a representable fee
+ * and extensions reject the payload outright (Shield: "Invalid transaction payload").
+ */
+const DEFAULT_BROWSER_FEE = 1_000;
+
+/** An on-chain Aleo transaction id, e.g. `at1…` — 61 chars. Mirrors the check in `AleoSpokeService`. */
+const ALEO_TX_PREFIX = 'at1';
+const ALEO_TX_LENGTH = 61;
+
+function isAleoTransactionId(value: string): boolean {
+  return value.startsWith(ALEO_TX_PREFIX) && value.length === ALEO_TX_LENGTH;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 export function isPrivateKeyConfig(config: AleoWalletConfig): config is PrivateKeyAleoWalletConfig {
   return config.type === 'privateKey';
@@ -222,7 +237,7 @@ export class AleoWalletProvider extends BaseWalletProvider<AleoWalletDefaults> i
         }
 
         return {
-          transactionId: result.transactionId,
+          transactionId: await this.resolveOnchainTransactionId(wallet.adapter, result.transactionId),
           outputs: undefined,
         };
       } catch (error) {
@@ -231,6 +246,40 @@ export class AleoWalletProvider extends BaseWalletProvider<AleoWalletDefaults> i
     }
 
     throw new Error('Invalid wallet configuration');
+  }
+
+  /**
+   * Resolve a browser wallet's `executeTransaction` return value into an on-chain Aleo tx id.
+   *
+   * Extensions may return a local request handle (Shield: `shield_<ts>_<rand>`) rather than the id,
+   * because proving and broadcasting happen after the call resolves — Provable types the id on
+   * `transactionStatus` as the onchain one "if already exists". Everything downstream (deposit
+   * verification, the backend submit-tx API) requires the real `at1…` id, so poll until it appears.
+   */
+  private async resolveOnchainTransactionId(adapter: WalletAdapter, returned: string): Promise<string> {
+    if (isAleoTransactionId(returned)) return returned;
+
+    const { checkInterval = 2000, timeout = 45000 } = this.mergePolicy('waitForReceipt', {});
+    const deadline = Date.now() + timeout;
+    let lastStatus = 'unknown';
+
+    while (Date.now() < deadline) {
+      const status = await adapter.transactionStatus(returned);
+      lastStatus = status?.status ?? lastStatus;
+
+      if (status?.transactionId && isAleoTransactionId(status.transactionId)) {
+        return status.transactionId;
+      }
+      if (lastStatus === 'failed' || lastStatus === 'rejected') {
+        throw new Error(`Aleo wallet ${lastStatus} the transaction${status?.error ? `: ${status.error}` : ''}`);
+      }
+
+      await sleep(checkInterval);
+    }
+
+    throw new Error(
+      `Wallet did not return an on-chain transaction id for ${returned} within ${timeout}ms (last status: ${lastStatus}). The transaction may still be broadcasting.`,
+    );
   }
 
   async waitForTransactionReceipt(

@@ -6,16 +6,16 @@ import {
   Sodax,
   encodeContractCalls,
   encodeAddress,
-  type SodaxConfig,
+  type SodaxOptions,
   type AleoSpokeChainConfig,
   type SonicSpokeChainConfig,
-  type DeepPartial,
   type HttpUrl,
+  type CreateIntentParams,
   ChainKeys,
   HUB_CHAIN_KEY,
   getIntentRelayChainId,
 } from '@sodax/sdk';
-import { AleoWalletProvider } from '@sodax/wallet-sdk-core';
+import { AleoWalletProvider, EvmWalletProvider } from '@sodax/wallet-sdk-core';
 
 const ALEO_CHAIN_KEY = ChainKeys.ALEO_MAINNET;
 const HUB_CHAIN_KEY_VALUE = HUB_CHAIN_KEY;
@@ -27,6 +27,9 @@ const PROVABLE_API_KEY = process.env.PROVABLE_API_KEY;
 const PROVABLE_CONSUMER_ID = process.env.PROVABLE_CONSUMER_ID;
 const HUB_RPC_URL = process.env.HUB_RPC_URL || 'https://rpc.soniclabs.com';
 const RELAYER_API_ENDPOINT = process.env.RELAYER_API_ENDPOINT as HttpUrl | undefined;
+const SOLVER_API_ENDPOINT = process.env.SOLVER_API_ENDPOINT as HttpUrl | undefined;
+const EVM_PRIVATE_KEY = process.env.EVM_PRIVATE_KEY as Hex | undefined;
+const ARBITRUM_RPC_URL = (process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc') as HttpUrl;
 
 if (!ALEO_PRIVATE_KEY) throw new Error('ALEO_PRIVATE_KEY is required');
 if (!ALEO_PRIVATE_KEY.startsWith('APrivateKey1')) throw new Error('Invalid ALEO_PRIVATE_KEY');
@@ -44,9 +47,10 @@ const aleoWalletProvider = new AleoWalletProvider({
   },
 });
 
-const sodaxConfigOverrides: DeepPartial<SodaxConfig> = {
+const sodaxConfigOverrides: SodaxOptions = {
   hub: { rpcUrl: HUB_RPC_URL },
   ...(RELAYER_API_ENDPOINT ? { relay: { relayerApiEndpoint: RELAYER_API_ENDPOINT } } : {}),
+  ...(SOLVER_API_ENDPOINT ? { solver: { solverApiEndpoint: SOLVER_API_ENDPOINT } } : {}),
 };
 
 const sodax = new Sodax(sodaxConfigOverrides);
@@ -223,9 +227,9 @@ async function swap(amount: number, inputToken: string, outputToken: string): Pr
       deadline: 0n,
       allowPartialFill: false,
       srcChainKey: ALEO_CHAIN_KEY,
-      dstChainKey: destinationChainConfig.chain.key,
+      dstChainKey: '0xa4b1.arbitrum',
       srcAddress: walletAddress,
-      dstAddress: userHubWallet,
+      dstAddress: '0x1787c00b80a7FBBCC208D051ce894aA37c364FF9', //userHubWallet
       solver: '0x0000000000000000000000000000000000000000',
       data: '0x',
     },
@@ -243,6 +247,97 @@ async function swap(amount: number, inputToken: string, outputToken: string): Pr
   console.log('[swap] srcTxHash:', intentDeliveryInfo.srcTxHash);
   console.log('[swap] dstTxHash:', intentDeliveryInfo.dstTxHash);
   console.log('[swap] solverExecutionResponse:', solverExecutionResponse);
+}
+
+/**
+ * Swap Arbitrum -> Aleo. The source side is EVM, so this signs with an Arbitrum wallet
+ * (EVM_PRIVATE_KEY) and only uses the Aleo wallet to derive the destination address.
+ */
+async function swapIn(amount: number, inputToken: string, outputToken: string): Promise<void> {
+  if (!EVM_PRIVATE_KEY) throw new Error('EVM_PRIVATE_KEY is required for swapIn');
+
+  const arbWalletProvider = new EvmWalletProvider({
+    privateKey: EVM_PRIVATE_KEY,
+    chainId: ChainKeys.ARBITRUM_MAINNET,
+    rpcUrl: ARBITRUM_RPC_URL,
+  });
+
+  const srcAddress = await arbWalletProvider.getWalletAddress();
+  const dstAddress = await aleoWalletProvider.getWalletAddress();
+  console.log('[swapIn] srcAddress:', srcAddress);
+  console.log('[swapIn] dstAddress:', dstAddress);
+
+  const quoteResult = await sodax.swaps.getQuote({
+    token_src: inputToken,
+    token_dst: outputToken,
+    token_src_blockchain_id: ChainKeys.ARBITRUM_MAINNET,
+    token_dst_blockchain_id: ALEO_CHAIN_KEY,
+    amount: BigInt(amount),
+    quote_type: 'exact_input',
+  });
+  console.log("Test: arb to aleo quote", quoteResult)
+  // return
+
+  if (!quoteResult.ok) {
+    console.error('[swapIn] quote failed:', quoteResult.error);
+    throw new Error('swapIn quote failed');
+  }
+  console.log('[swapIn] quoted amount:', quoteResult.value.quoted_amount.toString());
+
+  const deadlineResult = await sodax.swaps.getSwapDeadline(300n);
+  if (!deadlineResult.ok) {
+    console.error('[swapIn] deadline failed:', deadlineResult.error);
+    throw new Error('swapIn deadline failed');
+  }
+
+  const params: CreateIntentParams<typeof ChainKeys.ARBITRUM_MAINNET> = {
+    inputToken,
+    outputToken,
+    inputAmount: BigInt(amount),
+    minOutputAmount: (quoteResult.value.quoted_amount * 95n) / 100n,
+    deadline: deadlineResult.value,
+    allowPartialFill: false,
+    srcChainKey: ChainKeys.ARBITRUM_MAINNET,
+    dstChainKey: ALEO_CHAIN_KEY,
+    srcAddress,
+    dstAddress,
+    solver: '0x0000000000000000000000000000000000000000',
+    data: '0x',
+  };
+
+  const allowanceResult = await sodax.swaps.isAllowanceValid({ params, raw: false, walletProvider: arbWalletProvider });
+  if (!allowanceResult.ok) {
+    console.error('[swapIn] allowance check failed:', allowanceResult.error);
+    throw new Error('swapIn allowance check failed');
+  }
+
+  if (!allowanceResult.value) {
+    console.log('[swapIn] approving...');
+    const approveResult = await sodax.swaps.approve<typeof ChainKeys.ARBITRUM_MAINNET, false>({
+      params,
+      raw: false,
+      walletProvider: arbWalletProvider,
+    });
+    if (!approveResult.ok) {
+      console.error('[swapIn] approve failed:', approveResult.error);
+      throw new Error('swapIn approve failed');
+    }
+    await arbWalletProvider.waitForTransactionReceipt(approveResult.value);
+    console.log('[swapIn] approved:', approveResult.value);
+  }
+
+  const result = await sodax.swaps.swap({ params, raw: false, walletProvider: arbWalletProvider });
+
+  if (!result.ok) {
+    console.error('[swapIn] Failed:', result.error);
+    throw new Error('swapIn failed');
+  }
+
+  const { solverExecutionResponse, intent, intentDeliveryInfo } = result.value;
+  console.log('[swapIn] intentId:', intent.intentId);
+  console.log('[swapIn] srcTxHash:', intentDeliveryInfo.srcTxHash);
+  console.log('[swapIn] dstTxHash:', intentDeliveryInfo.dstTxHash);
+  console.log('[swapIn] solverExecutionResponse:', solverExecutionResponse);
 }
 
 async function getBalance(token: string): Promise<void> {
@@ -298,6 +393,11 @@ async function main(): Promise<void> {
     const inputToken = process.argv[4];
     const outputToken = process.argv[5];
     await swap(amount, inputToken, outputToken);
+  } else if (functionName === 'swapIn') {
+    const amount = Number(process.argv[3]);
+    const inputToken = process.argv[4];
+    const outputToken = process.argv[5];
+    await swapIn(amount, inputToken, outputToken);
   } else if (functionName === 'getBalance') {
     const token = process.argv[3];
     await getBalance(token);
@@ -313,7 +413,8 @@ async function main(): Promise<void> {
         '  deposit <token> <amount> <recipient>             - Deposit tokens to hub',
         '  withdrawAsset <token> <amount> <recipient>       - Withdraw tokens from hub',
         '  createIntent <amount> <inputToken> <outputToken> - Create swap intent (manual relay)',
-        '  swap <amount> <inputToken> <outputToken>         - Full swap (intent + relay + execute)',
+        '  swap <amount> <inputToken> <outputToken>         - Full swap Aleo -> dst (intent + relay + execute)',
+        '  swapIn <amount> <inputToken> <outputToken>       - Full swap Arbitrum -> Aleo (signs with EVM_PRIVATE_KEY)',
         '  getBalance <token>                               - Get deposited balance for a token',
         '  estimateGas <token> <amount>                     - Estimate Aleo gas for a deposit',
       ].join('\n'),
@@ -326,3 +427,16 @@ main().catch((error: unknown) => {
   if (error instanceof Error) console.error('Error:', error.message);
   process.exit(1);
 });
+
+
+// pnpm aleo swap 1 3443843282313283355522573239085696902919850365217539366784739393210722344986 0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+
+// pnpm aleo swapIn 1100000 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 3443843282313283355522573239085696902919850365217539366784739393210722344986
+
+// curl -X POST "https://sodax-solver-dev-2.iconblockchain.xyz/quote"   -H 'Content-Type: application/json'   -d '{
+//     "token_src": "0xEd7c473183e66c933e355da282481D464Dc11fc5",
+//     "token_dst": "0xdB7BdA65c3a1C51D64dC4444e418684677334109",
+//     "amount": "70000000",
+//     "quote_type": "exact_in",
+//     "include_route": false
+//   }'

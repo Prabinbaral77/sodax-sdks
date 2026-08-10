@@ -38,14 +38,17 @@ export const AleoHydrator = () => {
     aleoWalletRef.current = aleoWallet;
   });
 
-  // Memoize installed connectors. aleoWallet.wallets is an unstable array reference,
-  // but we only care about the installed subset and stable adapter identity.
+  // Register every discovered wallet, not just injected ones. `AleoXConnector` is a metadata
+  // wrapper (name, icon, installUrl) and the modal already handles the not-installed case:
+  // `useWalletModal` surfaces an install CTA and `sortConnectors` ranks installed ones first.
+  // Filtering on readyState here hides the wallet outright, leaving an empty Aleo group.
+  //
+  // `readyState` also flips in place when the extension injects after mount, so key the memo on
+  // the states as well — the array reference alone can stay identical across that transition.
+  const aleoReadyStates = aleoWallet.wallets.map(wallet => `${wallet.adapter.name}:${wallet.readyState}`).join('|');
   const aleoConnectors = useMemo(
-    () =>
-      aleoWallet.wallets
-        .filter(wallet => (wallet.readyState as string) === 'Installed')
-        .map(wallet => new AleoXConnector(wallet)),
-    [aleoWallet.wallets],
+    () => aleoWallet.wallets.map(wallet => new AleoXConnector(wallet)),
+    [aleoWallet.wallets, aleoReadyStates],
   );
 
   useEffect(() => {

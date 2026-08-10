@@ -435,6 +435,13 @@ export class SpokeService {
         return { ok: false, error: new Error('Hub chain id is not supported for deposit simulation') };
       }
 
+      // Aleo identifiers are not bech32m-encodable: tokens are `field` values and the asset manager
+      // is a `<program>.aleo` id, so `resolveSimulationEncoding` below would throw on both. Report
+      // "simulated OK" until an Aleo encoding exists, so the deposit still reaches the wallet.
+      if (isAleoChainKeyType(params.srcChainKey)) {
+        return { ok: true, value: true };
+      }
+
       const chainId = getIntentRelayChainId(params.srcChainKey);
       const hubAssetManager = this.hubProvider.chainConfig.addresses.assetManager;
       const { encodedToken, encodedSrcAddress } = this.resolveSimulationEncoding(params.srcChainKey, params.token);

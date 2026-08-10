@@ -82,6 +82,8 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
     [solverEnvironment],
   );
   const { mutateAsync: swap } = useSwap();
+  // Aleo on either side forces the client-side relay (the backend submit-tx API rejects Aleo intents).
+  const involvesAleo = src.chain === ChainKeys.ALEO_MAINNET || dst.chain === ChainKeys.ALEO_MAINNET;
   const [sourceAmount, setSourceAmount] = useState<string>('');
   const [intentOrderPayload, setIntentOrderPayload] = useState<CreateIntentParams | undefined>(undefined);
   const { data: hasAllowed, isLoading: isAllowanceLoading } = useSwapAllowance({
@@ -358,20 +360,29 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
   };
 
   const handleSwap = async (intentOrderPayload: CreateIntentParams) => {
-    if (useSubmitTxApi) {
+    // The backend submit-tx API does not accept Aleo intents, so any swap that touches Aleo on
+    // either side always uses the SDK's client-side relay path (`sodax.swaps.swap()`), which relays
+    // to the intent-relay endpoint (`relay.relayerApiEndpoint`, default xcall-relay) — regardless
+    // of the submit-tx toggle.
+    if (useSubmitTxApi && !involvesAleo) {
       await handleSubmitTxSwap(intentOrderPayload);
       return;
     }
 
-    setOpen(false);
     console.log('intentOrderPayload', intentOrderPayload);
     console.log('wallet provider', sourceWalletProvider);
-    if (!sourceWalletProvider) return;
+    if (!sourceWalletProvider) {
+      setSwapError('Source wallet provider unavailable — reconnect the source wallet.');
+      return;
+    }
     setSwapError(null);
     try {
       const swapResponse = await swap({ params: intentOrderPayload, walletProvider: sourceWalletProvider });
       const { solverExecutionResponse: response, intent, intentDeliveryInfo } = swapResponse;
       setOrders(prev => [...prev, { mode: 'solver', intentHash: response.intent_hash, intent, intentDeliveryInfo }]);
+      // Close only on success — a failure has to keep the dialog open, since `swapError` renders
+      // inside it and is otherwise never seen.
+      setOpen(false);
     } catch (error) {
       console.error('Error creating and submitting intent:', error);
       setSwapError(formatMutationFailureMessage(error, 'Swap failed'));
@@ -634,10 +645,14 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
           <input
             id="submit-tx-toggle"
             type="checkbox"
-            checked={useSubmitTxApi}
+            checked={useSubmitTxApi && !involvesAleo}
+            disabled={involvesAleo}
             onChange={e => setUseSubmitTxApi(e.target.checked)}
-            className="h-4 w-4 cursor-pointer"
+            className="h-4 w-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           />
+          {involvesAleo && (
+            <span className="text-xs text-muted-foreground">Not supported for Aleo — uses client-side relay</span>
+          )}
         </div>
 
         {canHyperCoreDeposit && (

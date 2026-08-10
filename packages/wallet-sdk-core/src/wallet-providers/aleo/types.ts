@@ -14,7 +14,9 @@ export type DelegateProvingConfig = {
 export type AleoWalletDefaults = {
   /**
    * Default priority fee applied when `execute()` is called without `priorityFee`.
-   * Fallbacks if unset: `0` (private-key wallets), `0.001` (browser-extension wallets).
+   * Fallbacks if unset: `0` (private-key wallets), `1_000` microcredits / 0.001 ALEO
+   * (browser-extension wallets). Browser wallets take a u64 microcredit amount — pass a
+   * whole number, not a fractional ALEO value.
    */
   priorityFee?: number;
   /** Default privacy mode for fees on `execute()`. Default `false`. */
