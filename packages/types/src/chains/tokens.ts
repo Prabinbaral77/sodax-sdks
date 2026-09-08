@@ -2392,7 +2392,7 @@ export const aleoSupportedTokens = {
     decimals: 6,
     address: '3443843282313283355522573239085696902919850365217539366784739393210722344986',
     chainKey: ChainKeys.ALEO_MAINNET,
-    hubAsset: '0xEd7c473183e66c933e355da282481D464Dc11fc5',
+    hubAsset: '0xc1493a5c00558aeb752e5a37b35dfed39e565e80',
     vault: '0x',
   },
   VUSDC: {
