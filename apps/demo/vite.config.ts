@@ -47,7 +47,7 @@ export default defineConfig(({ command, mode }: ConfigEnv) => {
       // this ensures that the browser opens upon server start
       open: true,
       // this sets a default port to 3000
-      port: 3000,
+      port: 7001,
       // Local observability testing (no DNS): forward `/__intake/*` to the localhost mock-intake
       // server (`pnpm mock-intake`). The browser only ever talks to this same-origin path, so the
       // Sentry/Datadog adapters need no DNS resolution and trigger no CORS preflight.
