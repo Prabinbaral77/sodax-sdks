@@ -433,7 +433,7 @@ main().catch((error: unknown) => {
 
 // pnpm aleo swapIn 1100000 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 3443843282313283355522573239085696902919850365217539366784739393210722344986
 
-// curl -X POST "https://sodax-solver-dev-2.iconblockchain.xyz/quote"   -H 'Content-Type: application/json'   -d '{
+// curl -X POST "https://testnet-xcall-relay.nw.iconblockchain.xyz/quote"   -H 'Content-Type: application/json'   -d '{
 //     "token_src": "0xEd7c473183e66c933e355da282481D464Dc11fc5",
 //     "token_dst": "0xdB7BdA65c3a1C51D64dC4444e418684677334109",
 //     "amount": "70000000",
